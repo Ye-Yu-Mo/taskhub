@@ -275,14 +275,43 @@ const LogViewer = ({ runId, status }) => {
 };
 
 const RunDetail = ({ runId, onNavigateBack }) => {
-  const { data: run, error } = useSWR(runId ? `/api/runs/${runId}` : null, fetcher, { refreshInterval: 1000 });
+  const { data: run, error: runError } = useSWR(runId ? `/api/runs/${runId}` : null, fetcher, { refreshInterval: 2000 });
   const { data: tasks } = useSWR('/api/tasks', fetcher);
+  
   const [activeTab, setActiveTab] = useState('overview');
+  const [events, setEvents] = useState([]);
+  const [cursor, setCursor] = useState(0);
 
-  if (error) return <div>加载失败</div>;
+  // 增量获取事件
+  useEffect(() => {
+    if (!runId || (run && run.status !== 'RUNNING' && run.status !== 'QUEUED' && events.length > 0)) {
+        return;
+    }
+
+    const fetchEvents = async () => {
+      try {
+        const res = await axios.get(`/api/runs/${runId}/events?cursor=${cursor}`);
+        if (res.data.items.length > 0) {
+          setEvents(prev => [...prev, ...res.data.items]);
+          setCursor(res.data.next_cursor);
+        }
+      } catch (e) {
+        console.error("Fetch events failed", e);
+      }
+    };
+
+    const timer = setInterval(fetchEvents, 1000);
+    return () => clearInterval(timer);
+  }, [runId, cursor, run?.status]);
+
+  if (runError) return <div>加载失败</div>;
   if (!run) return <div>加载中...</div>;
 
   const task = tasks?.find(t => t.task_id === run.task_id) || { name: run.task_id };
+  
+  // 计算当前进度
+  const latestProgress = [...events].reverse().find(e => e.type === 'progress');
+  const progressPct = latestProgress ? latestProgress.data.pct : (run.status === 'SUCCEEDED' ? 100 : 0);
 
   const tabNames = {
     logs: '日志',
@@ -309,7 +338,7 @@ const RunDetail = ({ runId, onNavigateBack }) => {
           <span>{run.run_id}</span>
         </div>
         <div className="flex justify-between items-start">
-          <div>
+          <div className="flex-1">
             <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
               {task.name}
               <StatusBadge status={run.status} />
@@ -318,6 +347,16 @@ const RunDetail = ({ runId, onNavigateBack }) => {
               <span>ID: {run.run_id}</span>
               <span>耗时: {run.duration || '-'}</span>
             </div>
+            
+            {/* 进度条 */}
+            {(run.status === 'RUNNING' || progressPct > 0) && (
+              <div className="mt-4 w-full max-w-md bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="bg-blue-600 h-full transition-all duration-500" 
+                  style={{ width: `${progressPct}%` }}
+                ></div>
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             {(run.status === 'RUNNING' || run.status === 'QUEUED') && (
@@ -354,16 +393,31 @@ const RunDetail = ({ runId, onNavigateBack }) => {
       {/* Content Area */}
       <div className="flex-1 overflow-hidden p-6 bg-gray-50">
         {activeTab === 'logs' && (
-           <LogViewer runId={run.run_id} status={run.status} />
+           <div className="flex flex-col h-full bg-gray-900 text-gray-200 font-mono text-xs rounded-lg overflow-hidden border border-gray-700">
+             <div className="px-3 py-1 bg-gray-800 border-b border-gray-700 flex justify-between">
+               <span>事件日志 (Events)</span>
+               <span className="text-gray-500">Count: {events.length}</span>
+             </div>
+             <div className="flex-1 overflow-y-auto p-3 space-y-1">
+               {events.map((evt, idx) => (
+                 <div key={idx} className="break-all">
+                   <span className="text-gray-500 mr-2">[{new Date(evt.ts).toLocaleTimeString()}]</span>
+                   <span className="text-blue-400 mr-2">[{evt.type}]</span>
+                   <span>{JSON.stringify(evt.data)}</span>
+                 </div>
+               ))}
+               {run.status === 'RUNNING' && <div className="animate-pulse text-gray-500">_</div>}
+             </div>
+           </div>
         )}
         {activeTab === 'overview' && (
-          <div className="bg-white border rounded p-6 max-w-3xl">
+          <div className="bg-white border rounded p-6 max-w-3xl overflow-auto h-full">
              <h3 className="font-bold text-gray-800 mb-4">运行参数 (Run Parameters)</h3>
              <pre className="bg-gray-50 p-4 rounded text-sm font-mono border">
                {JSON.stringify(run.params, null, 2)}
              </pre>
              <h3 className="font-bold text-gray-800 mt-6 mb-4">系统信息 (System Info)</h3>
-             <div className="grid grid-cols-2 gap-4 text-sm">
+             <div className="grid grid-cols-1 gap-2 text-sm">
                 <div className="flex justify-between border-b py-2">
                     <span className="text-gray-500">Worker ID</span>
                     <span className="font-mono">{run.lease_owner || '-'}</span>

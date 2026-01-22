@@ -3,12 +3,13 @@ import os
 import signal
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 from taskhub_api.models import RunStatus, Run
 from taskhub_api.storage import Storage
+from taskhub_api.registry import Registry
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -20,6 +21,8 @@ class Worker:
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
         self.running = True
+        self.registry = Registry()
+        self.registry.discover()
 
     async def run(self):
         """Worker 主循环"""
@@ -42,19 +45,21 @@ class Worker:
 
     async def execute_run(self, run_record: Run):
         """执行单个 Run"""
-        # TODO: 这里应该根据 task_id 加载真实的 TaskSpec 构造命令
-        # v0.1 暂时硬编码一个演示用的命令
-        params_json = json.dumps(run_record.params)
-        cmd = ["python3", "-c", f"""
-import time, sys, json
-print("开始执行演示脚本...")
-print(f"收到参数: {{json.dumps({params_json})}}")
-for i in range(1, 6):
-    print(f"TASKHUB_EVENT {{json.dumps({{'type': 'progress', 'data': {{'pct': i*20, 'stage': 'running'}} }})}}")
-    print(f"正在处理第 {{i}} 步...")
-    time.sleep(1)
-print("执行完成！")
-"""]
+        # 动态加载任务定义
+        task_spec = self.registry.get_task(run_record.task_id)
+        if not task_spec:
+            logger.error(f"找不到任务定义: {run_record.task_id}")
+            await self.storage.update_run_status(run_record.run_id, RunStatus.FAILED, error=f"Task definition {run_record.task_id} not found")
+            return
+
+        try:
+            # 校验并构造命令
+            params_obj = task_spec.params_model(**run_record.params)
+            cmd = task_spec.build_command(params_obj)
+        except Exception as e:
+            logger.error(f"构造命令失败: {e}")
+            await self.storage.update_run_status(run_record.run_id, RunStatus.FAILED, error=f"Build command failed: {e}")
+            return
         
         # 确保工作目录存在
         Path(run_record.workdir).mkdir(parents=True, exist_ok=True)
@@ -105,23 +110,56 @@ print("执行完成！")
 
     async def drain_stream(self, stream: asyncio.StreamReader, run_id: str, stream_name: str):
         """读取输出并解析事件"""
-        # TODO: 写入 run_record.workdir 下的 stdout.log / stderr.log
-        # TODO: 识别 TASKHUB_EVENT 写入 events.jsonl
-        while True:
-            line = await stream.readline()
-            if not line:
-                break
-            text = line.decode('utf-8', errors='replace').rstrip()
-            
-            if stream_name == "stdout" and text.startswith("TASKHUB_EVENT "):
-                try:
-                    event_data = json.loads(text[14:])
-                    # TODO: 写入 events.jsonl
-                    # logger.info(f"EVENT [{run_id}]: {event_data}")
-                except:
-                    pass
-            
-            # logger.debug(f"[{run_id} {stream_name}] {text}")
+        # 准备文件路径
+        # TODO: 更好的方式是从 run_record 传递 workdir，这里暂时为了简单直接拼
+        # 实际生产中应该在 execute_run 里把 file handle 传进来
+        workdir = f"data/runs/{run_id}"
+        log_file = Path(workdir) / f"{stream_name}.log"
+        events_file = Path(workdir) / "events.jsonl"
+        
+        # 简单的 seq 计数器，注意：并发写 events 只有这一个协程吗？
+        # 目前只有 stdout 会产生 events，所以是安全的。
+        # 如果 stderr 也要产生，需要锁。
+        # v0.1 假设只有 stdout 产出 events。
+        seq_counter = 0 
+        
+        # 确保目录存在（虽然 execute_run 已经建了，防万一）
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with open(log_file, "a", encoding="utf-8", buffering=1) as f_log:
+                while True:
+                    line_bytes = await stream.readline()
+                    if not line_bytes:
+                        break
+                    
+                    # 写入原始日志
+                    text = line_bytes.decode('utf-8', errors='replace')
+                    f_log.write(text)
+                    
+                    # 解析事件 (仅 stdout)
+                    clean_line = text.strip()
+                    if stream_name == "stdout" and clean_line.startswith("TASKHUB_EVENT "):
+                        try:
+                            raw_json = clean_line[14:]
+                            event_data = json.loads(raw_json)
+                            
+                            seq_counter += 1
+                            event_record = {
+                                "seq": seq_counter,
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "run_id": run_id,
+                                "type": event_data.get("type", "log"),
+                                "data": event_data.get("data", {})
+                            }
+                            
+                            with open(events_file, "a", encoding="utf-8") as f_events:
+                                f_events.write(json.dumps(event_record) + "\n")
+                                
+                        except Exception as e:
+                            logger.warning(f"事件解析失败: {e} - Line: {clean_line[:50]}...")
+        except Exception as e:
+             logger.error(f"流处理异常 [{stream_name}]: {e}")
 
     def stop(self):
         self.running = False

@@ -46,7 +46,12 @@ class EventRead(BaseModel):
     seq: int
     ts: datetime
     type: str
+    run_id: str
     data: Dict[str, Any]
+
+class EventList(BaseModel):
+    items: List[EventRead]
+    next_cursor: int
 
 class ArtifactItem(BaseModel):
     artifact_id: str

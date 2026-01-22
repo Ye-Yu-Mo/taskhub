@@ -1,44 +1,57 @@
 from fastapi import FastAPI, HTTPException, Depends, Query
 from typing import List, Optional
 import uuid
+import json
+from pathlib import Path
 from datetime import datetime
 from contextlib import asynccontextmanager
 
 from .models import Run, RunStatus, Task
-from .schemas import TaskRead, RunCreate, RunRead
+from .schemas import TaskRead, RunCreate, RunRead, EventList, EventRead
 from .storage import Storage, _storage_instance
+from .registry import Registry, get_schema_hash
 
 # 这里的数据库路径之后应该从 config 加载
 DB_URL = "sqlite+aiosqlite:///data/taskhub.db"
+_registry_instance: Optional[Registry] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动时初始化
-    global _storage_instance
+    global _storage_instance, _registry_instance
     _storage_instance = Storage(DB_URL)
     await _storage_instance.init_db()
     
-    # TODO: 扫描 tasks/ 目录并自动注册任务
-    # 为了演示，我们可以手动插入一个测试任务（现实中应该由扫描逻辑完成）
+    # 扫描并注册任务
+    _registry_instance = Registry()
+    _registry_instance.discover()
+    
     async with _storage_instance.session_factory() as session:
         async with session.begin():
-            test_task = await session.get(Task, "demo_task")
-            if not test_task:
-                session.add(Task(
-                    task_id="demo_task",
-                    name="演示任务",
-                    description="这是一个用于测试的演示任务",
-                    params_schema={
-                        "type": "object",
-                        "properties": {
-                            "count": {"type": "integer", "default": 10},
-                            "message": {"type": "string", "default": "hello"}
-                        }
-                    },
-                    schema_hash="initial",
-                    version="0.1.0",
-                    concurrency_limit=2
-                ))
+            for task_spec in _registry_instance.get_all_tasks():
+                schema = task_spec.params_model.model_json_schema()
+                schema_hash = get_schema_hash(schema)
+                
+                # Upsert 逻辑
+                existing = await session.get(Task, task_spec.task_id)
+                if not existing:
+                    session.add(Task(
+                        task_id=task_spec.task_id,
+                        name=task_spec.name,
+                        description=task_spec.description,
+                        params_schema=schema,
+                        schema_hash=schema_hash,
+                        version=task_spec.version,
+                        concurrency_limit=task_spec.concurrency_limit,
+                        timeout_seconds=task_spec.timeout_seconds
+                    ))
+                else:
+                    # 如果元信息变了，更新它
+                    existing.name = task_spec.name
+                    existing.params_schema = schema
+                    existing.schema_hash = schema_hash
+                    existing.version = task_spec.version
+                    existing.concurrency_limit = task_spec.concurrency_limit
     
     yield
     # 关闭时清理（如有需要）
@@ -123,4 +136,40 @@ async def cancel_run(run_id: str, storage: Storage = Depends(get_db_storage)):
                 .where(Run.run_id == run_id)
                 .values(cancel_requested_at=datetime.utcnow())
             )
-    return {"status": "cancel_requested"}
+@api_app.get("/api/runs/{run_id}/events", response_model=EventList)
+async def get_run_events(run_id: str, cursor: int = 0, storage: Storage = Depends(get_db_storage)):
+    """获取增量事件流"""
+    # 1. 简单校验 run 是否存在（也可跳过以提高性能）
+    # async with storage.session_factory() as session:
+    #     run = await session.get(Run, run_id)
+    #     if not run:
+    #         raise HTTPException(status_code=404, detail="Run not found")
+            
+    events_path = Path(f"data/runs/{run_id}/events.jsonl")
+    if not events_path.exists():
+        return {"items": [], "next_cursor": cursor}
+    
+    items = []
+    max_seq = cursor
+    
+    try:
+        # TODO: 对于大文件，这里应该优化为 seek + readline，或者只读最后 N 行
+        # v0.1 简单全读
+        with open(events_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                    if evt["seq"] > cursor:
+                        items.append(evt)
+                        if evt["seq"] > max_seq:
+                            max_seq = evt["seq"]
+                except:
+                    continue
+    except Exception as e:
+        # 文件读写竞争时可能偶尔报错，忽略本次
+        pass
+        
+    return {"items": items, "next_cursor": max_seq}
