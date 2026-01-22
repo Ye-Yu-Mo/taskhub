@@ -7,8 +7,11 @@ from datetime import datetime, timedelta
 
 from .models import Base, Task, Run, RunQueue, RunStatus
 
+# 默认数据库连接
+DB_URL = "sqlite+aiosqlite:///data/taskhub.db"
+
 class Storage:
-    def __init__(self, db_url: str):
+    def __init__(self, db_url: str = DB_URL):
         # 启用 WAL 模式以支持更高并发
         self.engine = create_async_engine(db_url, echo=False)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -127,6 +130,23 @@ class Storage:
                     .values(lease_expires_at=new_expiry)
                 )
                 return result.rowcount > 0
+
+    async def set_run_pid(self, run_id: str, pid: int):
+        """记录任务对应的进程ID"""
+        async with self.session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(Run)
+                    .where(Run.run_id == run_id)
+                    .values(worker_pid=pid)
+                )
+
+    async def check_run_cancel_status(self, run_id: str) -> bool:
+        """检查任务是否被请求取消"""
+        async with self.session_factory() as session:
+            # 只查 cancel_requested_at 字段，轻量级
+            run = await session.get(Run, run_id)
+            return run.cancel_requested_at is not None if run else False
 
     async def update_run_status(self, run_id: str, status: RunStatus, exit_code: Optional[int] = None, error: Optional[str] = None):
         """Worker 结束任务"""

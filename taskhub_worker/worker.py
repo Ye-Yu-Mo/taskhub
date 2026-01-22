@@ -75,9 +75,18 @@ class Worker:
         )
 
         pgid = process.pid # 在 setsid 后，pid 就是 pgid
+        
+        # 立即记录 PID，以便 Reaper 在我们崩溃时能接管
+        try:
+            await self.storage.set_run_pid(run_record.run_id, pgid)
+        except Exception as e:
+            logger.error(f"记录 PID 失败: {e}，正在终止任务以防孤儿进程")
+            os.killpg(pgid, signal.SIGKILL)
+            await self.storage.update_run_status(run_record.run_id, RunStatus.FAILED, error="Failed to persist PID")
+            return
 
         # 启动心跳和 IO 收集
-        heartbeat_task = asyncio.create_task(self.heartbeat_loop(run_record.run_id))
+        heartbeat_task = asyncio.create_task(self.heartbeat_loop(run_record.run_id, pgid))
         stdout_task = asyncio.create_task(self.drain_stream(process.stdout, run_record.run_id, "stdout"))
         stderr_task = asyncio.create_task(self.drain_stream(process.stderr, run_record.run_id, "stderr"))
 
@@ -85,28 +94,65 @@ class Worker:
             exit_code = await process.wait()
             logger.info(f"任务 {run_record.run_id} 运行结束，退出码: {exit_code}")
             
-            # 更新状态
-            status = RunStatus.SUCCEEDED if exit_code == 0 else RunStatus.FAILED
-            error_msg = None if exit_code == 0 else f"Process exited with {exit_code}"
-            await self.storage.update_run_status(run_record.run_id, status, exit_code, error_msg)
+            # 检查是否是因为取消而结束的
+            is_canceled = await self.storage.check_run_cancel_status(run_record.run_id)
+            if is_canceled:
+                 await self.storage.update_run_status(run_record.run_id, RunStatus.CANCELED, error="Canceled by user")
+            else:
+                # 更新状态
+                status = RunStatus.SUCCEEDED if exit_code == 0 else RunStatus.FAILED
+                error_msg = None if exit_code == 0 else f"Process exited with {exit_code}"
+                await self.storage.update_run_status(run_record.run_id, status, exit_code, error_msg)
             
         except asyncio.CancelledError:
-            # 处理取消逻辑
-            logger.warning(f"任务 {run_record.run_id} 被取消，正在杀掉进程组 {pgid}")
-            os.killpg(pgid, signal.SIGKILL)
-            await self.storage.update_run_status(run_record.run_id, RunStatus.CANCELED, error="Canceled by user")
+            # 处理取消逻辑 (Worker 停止时触发)
+            logger.warning(f"任务 {run_record.run_id} 被 Worker 停止信号中断，正在杀掉进程组 {pgid}")
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await self.storage.update_run_status(run_record.run_id, RunStatus.CANCELED, error="Worker stopped")
         finally:
             heartbeat_task.cancel()
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
-    async def heartbeat_loop(self, run_id: str):
-        """心跳更新 Lease"""
+    async def heartbeat_loop(self, run_id: str, pgid: int):
+        """心跳更新 Lease，同时检查取消信号"""
+        import time
+        last_lease_time = 0
+        check_interval = 1.0  # 1秒检查一次取消状态
+        
         while True:
-            await asyncio.sleep(self.lease_seconds // 3)
-            success = await self.storage.extend_lease(run_id, self.worker_id, self.lease_seconds)
-            if not success:
-                logger.error(f"任务 {run_id} 续租失败！")
-                break
+            # 1. 检查是否被取消
+            try:
+                if await self.storage.check_run_cancel_status(run_id):
+                    logger.info(f"检测到取消信号，正在终止任务 {run_id} (PGID: {pgid})")
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass # 进程可能已经死了
+                    break
+            except Exception as e:
+                logger.error(f"检查取消状态失败: {e}")
+
+            # 2. 续租 (按 lease_seconds / 3 的频率)
+            now = time.time()
+            if now - last_lease_time > (self.lease_seconds / 3):
+                try:
+                    success = await self.storage.extend_lease(run_id, self.worker_id, self.lease_seconds)
+                    if not success:
+                        logger.error(f"任务 {run_id} 续租失败（可能已被抢占或过期）！")
+                        try:
+                            os.killpg(pgid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        break
+                    last_lease_time = now
+                except Exception as e:
+                    logger.error(f"续租异常: {e}")
+                    break
+            
+            await asyncio.sleep(check_interval)
 
     async def drain_stream(self, stream: asyncio.StreamReader, run_id: str, stream_name: str):
         """读取输出并解析事件"""

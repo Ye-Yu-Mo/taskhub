@@ -9,11 +9,10 @@ from contextlib import asynccontextmanager
 
 from .models import Run, RunStatus, Task
 from .schemas import TaskRead, RunCreate, RunRead, EventList, EventRead, ArtifactsRead, ArtifactItem
-from .storage import Storage, _storage_instance
+from .storage import Storage, _storage_instance, DB_URL
 from .registry import Registry, get_schema_hash
 
 # 这里的数据库路径之后应该从 config 加载
-DB_URL = "sqlite+aiosqlite:///data/taskhub.db"
 _registry_instance: Optional[Registry] = None
 
 @asynccontextmanager

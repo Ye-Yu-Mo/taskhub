@@ -67,6 +67,7 @@ class Run(Base):
     # 租约管理（Worker 存活证明）
     lease_owner: Mapped[Optional[str]] = mapped_column(String(100))
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    worker_pid: Mapped[Optional[int]] = mapped_column(Integer) # 运行该任务的进程(组)ID
 
     # 索引优化查询
     __table_args__ = (
