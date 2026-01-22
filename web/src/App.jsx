@@ -274,6 +274,48 @@ const LogViewer = ({ runId, status }) => {
   );
 };
 
+const ArtifactsViewer = ({ runId }) => {
+  const { data: artifacts, error } = useSWR(runId ? `/api/runs/${runId}/artifacts` : null, fetcher);
+
+  if (error) return <div className="text-red-500">加载产物失败</div>;
+  if (!artifacts) return <div className="text-gray-500">加载中...</div>;
+  if (artifacts.items.length === 0) return <div className="text-gray-500 italic">暂无产物</div>;
+
+  const handleDownload = (fileId) => {
+    window.open(`/api/runs/${runId}/files/${fileId}`, '_blank');
+  };
+
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      {artifacts.items.map((art) => (
+        <div key={art.artifact_id} className="border rounded p-4 flex items-center justify-between bg-white hover:bg-gray-50">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gray-100 rounded text-gray-500">
+              {art.kind === 'image' ? <Layers size={16} /> : 
+               art.kind === 'table' || art.mime === 'text/csv' ? <Database size={16} /> :
+               <FileText size={16} />}
+            </div>
+            <div>
+              <div className="font-medium text-sm text-blue-600 hover:underline cursor-pointer" onClick={() => handleDownload(art.file_id)}>
+                {art.title}
+              </div>
+              <div className="text-xs text-gray-500">
+                {art.size_bytes ? `${(art.size_bytes / 1024).toFixed(1)} KB` : '未知大小'} • {art.kind.toUpperCase()}
+              </div>
+            </div>
+          </div>
+          <button 
+            onClick={() => handleDownload(art.file_id)}
+            className="text-gray-400 hover:text-gray-600 flex items-center gap-1 text-xs"
+          >
+            <Download size={14} /> 下载
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const RunDetail = ({ runId, onNavigateBack }) => {
   const { data: run, error: runError } = useSWR(runId ? `/api/runs/${runId}` : null, fetcher, { refreshInterval: 2000 });
   const { data: tasks } = useSWR('/api/tasks', fetcher);
@@ -434,7 +476,7 @@ const RunDetail = ({ runId, onNavigateBack }) => {
           </div>
         )}
         {activeTab === 'artifacts' && (
-           <div className="text-gray-500">暂无产物展示 (开发中)</div>
+           <ArtifactsViewer runId={run.run_id} />
         )}
       </div>
     </div>
