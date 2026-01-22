@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from typing import List, Optional
 import uuid
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from .models import Run, RunStatus, Task
@@ -12,7 +13,6 @@ from .schemas import TaskRead, RunCreate, RunRead, EventList, EventRead, Artifac
 from .storage import Storage, _storage_instance, DB_URL
 from .registry import Registry, get_schema_hash
 
-# 这里的数据库路径之后应该从 config 加载
 _registry_instance: Optional[Registry] = None
 
 @asynccontextmanager
@@ -79,6 +79,19 @@ async def list_tasks(storage: Storage = Depends(get_db_storage)):
         result = await session.execute(select(Task))
         return result.scalars().all()
 
+@api_app.get("/api/workers")
+async def list_workers(storage: Storage = Depends(get_db_storage)):
+    """获取活跃节点列表"""
+    workers = await storage.get_active_workers()
+    return [{
+        "id": w.worker_id,
+        "hostname": w.hostname,
+        "pid": w.pid,
+        "status": w.status,
+        "run_id": w.current_run_id,
+        "last_heartbeat": w.last_heartbeat
+    } for w in workers]
+
 @api_app.post("/api/tasks/{task_id}/runs", response_model=RunRead)
 async def create_run(
     task_id: str, 
@@ -113,7 +126,7 @@ async def create_run(
         status=RunStatus.QUEUED,
         params=validated_params,
         workdir=workdir,
-        created_at=datetime.utcnow()
+        created_at=datetime.now(timezone.utc)
     )
     
     return await storage.create_run(new_run)
@@ -146,11 +159,6 @@ async def get_run(run_id: str, storage: Storage = Depends(get_db_storage)):
             raise HTTPException(status_code=404, detail="运行记录不存在")
         
         # 简单计算 duration
-        # 注意：这里返回的对象是 SQLAlchemy 模型，需要转成 Pydantic 模型或者由 FastAPI 自动转换
-        # 为了注入 computed field，最好先转成 dict 或者让 Pydantic model 的 validator 处理
-        # 这里我们利用 Pydantic 的 from_attributes，但 duration 不是 DB 字段
-        # 我们可以动态赋值
-        
         run_dto = RunRead.model_validate(run)
         if run.started_at and run.finished_at:
             delta = run.finished_at - run.started_at
@@ -237,10 +245,9 @@ async def download_file(run_id: str, file_id: str, storage: Storage = Depends(ge
             for item in data.get("items", []):
                 if item["file_id"] == file_id:
                     target_path = item["path"]
-                    # 优先使用 title 作为文件名，如果有 mime 则补后缀（简略逻辑）
+                    # 优先使用 title 作为文件名，如果有 mime 则补后缀
                     filename = item.get("title", file_id)
                     media_type = item.get("mime")
-                    # 简单的后缀补全
                     if media_type == "text/csv" and not filename.endswith(".csv"):
                         filename += ".csv"
                     elif media_type == "text/html" and not filename.endswith(".html"):
@@ -267,7 +274,6 @@ async def download_file(run_id: str, file_id: str, storage: Storage = Depends(ge
         raise HTTPException(status_code=404, detail="File on disk missing")
         
     # 智能判断 Content-Disposition
-    # 默认是 attachment (下载)，对于可预览类型设为 inline
     previewable_types = [
         "text/html", 
         "text/plain", 
@@ -281,3 +287,28 @@ async def download_file(run_id: str, file_id: str, storage: Storage = Depends(ge
     disposition = "inline" if media_type in previewable_types else "attachment"
 
     return FileResponse(abs_path, filename=filename, media_type=media_type, content_disposition_type=disposition)
+
+# --- 静态文件托管 (SPA Support) ---
+
+# 检查 dist 是否存在（开发模式下可能不存在）
+DIST_DIR = Path("web/dist")
+if DIST_DIR.exists():
+    # 挂载 assets 目录 (Vite 打包默认输出到 assets)
+    api_app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
+
+    # 处理 SPA 路由回退
+    @api_app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # 保护 API 路由：如果以 api/ 开头但没匹配到上面定义的路由，直接 404
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API Endpoint Not Found")
+        
+        # 尝试直接服务根目录下的文件 (如 favicon.svg, robots.txt)
+        file_path = DIST_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+            
+        # 所有其他路径 (如 /runs, /dashboard) 都返回 index.html
+        return FileResponse(DIST_DIR / "index.html")
+else:
+    print("Warning: web/dist directory not found. Frontend will not be served.")

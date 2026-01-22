@@ -353,11 +353,74 @@ const PreviewPage = ({ runId, fileId, onBack }) => {
   );
 };
 
+const WorkerList = () => {
+  const { data: workers, error } = useSWR('/api/workers', fetcher, { refreshInterval: 3000 });
+
+  if (error) return <div className="text-red-500">加载节点失败</div>;
+  if (!workers) return <div className="text-gray-500">加载节点中...</div>;
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader title="计算节点 (Compute Nodes)" rightContent={
+        <div className="text-sm text-gray-500">共 {workers.length} 个节点在线</div>
+      } />
+      
+      {workers.length === 0 ? (
+        <div className="bg-white border rounded p-8 text-center text-gray-400">
+          暂无活跃节点，请检查 Worker 进程是否启动
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {workers.map(w => (
+            <div key={w.id} className="bg-white border rounded shadow-sm flex flex-col relative overflow-hidden transition-all hover:shadow-md">
+              <div className={`absolute top-0 left-0 w-1.5 h-full ${w.status === 'BUSY' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+              
+              <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                 <div className="font-mono text-xs text-gray-500 truncate max-w-[120px]" title={w.id}>{w.id.split('-').pop()}</div>
+                 <span className={`text-xs px-2 py-0.5 rounded font-bold ${w.status === 'BUSY' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+                    {w.status}
+                 </span>
+              </div>
+              
+              <div className="p-4 flex-1 space-y-3">
+                 <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-500">PID</span>
+                    <span className="font-mono">{w.pid}</span>
+                 </div>
+                 <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-500">Host</span>
+                    <span className="font-mono truncate max-w-[100px]" title={w.hostname}>{w.hostname}</span>
+                 </div>
+                 <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-500">Heartbeat</span>
+                    <span className="text-xs text-gray-400">{new Date(w.last_heartbeat).toLocaleTimeString()}</span>
+                 </div>
+                 
+                 {w.status === 'BUSY' && (
+                   <div className="mt-2 pt-2 border-t">
+                     <div className="text-xs text-gray-500 mb-1">正在执行</div>
+                     <div className="text-xs font-mono bg-blue-50 text-blue-700 p-1.5 rounded truncate" title={w.run_id}>
+                       {w.run_id}
+                     </div>
+                   </div>
+                 )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Dashboard = ({ runs, tasks, navigate }) => {
   const activeRuns = runs.filter(r => r.status === 'RUNNING').length;
   const successCount = runs.filter(r => r.status === 'SUCCEEDED').length;
   const successRate = runs.length > 0 ? ((successCount / runs.length) * 100).toFixed(1) : '0.0';
   
+  // Dashboard 仍然获取 workers 数量用于展示 Stats，但不展示列表
+  const { data: workers } = useSWR('/api/workers', fetcher, { refreshInterval: 10000 });
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">仪表盘 (Dashboard)</h1>
@@ -368,9 +431,9 @@ const Dashboard = ({ runs, tasks, navigate }) => {
           <div className="text-gray-500 text-xs uppercase font-bold tracking-wider">活跃任务 (Active)</div>
           <div className="text-3xl font-mono font-semibold mt-1 text-blue-600">{activeRuns}</div>
         </div>
-        <div className="bg-white p-4 rounded border shadow-sm">
-          <div className="text-gray-500 text-xs uppercase font-bold tracking-wider">任务总数 (Total)</div>
-          <div className="text-3xl font-mono font-semibold mt-1">{tasks.length}</div>
+        <div className="bg-white p-4 rounded border shadow-sm cursor-pointer hover:bg-gray-50 transition-colors" onClick={() => navigate('workers')}>
+          <div className="text-gray-500 text-xs uppercase font-bold tracking-wider">计算节点 (Workers)</div>
+          <div className="text-3xl font-mono font-semibold mt-1 text-orange-600">{workers?.length || 0}</div>
         </div>
         <div className="bg-white p-4 rounded border shadow-sm">
           <div className="text-gray-500 text-xs uppercase font-bold tracking-wider">成功率 (Success Rate)</div>
@@ -403,6 +466,36 @@ const Dashboard = ({ runs, tasks, navigate }) => {
           ))}
         </div>
       </div>
+
+      {/* Worker Nodes */}
+      {workers && workers.length > 0 && (
+        <div className="bg-white rounded border shadow-sm">
+          <div className="px-4 py-3 border-b bg-gray-50 flex justify-between items-center">
+            <h3 className="font-semibold text-gray-700">系统节点状态</h3>
+            <button onClick={() => navigate('workers')} className="text-xs text-blue-600 hover:underline">查看详细</button>
+          </div>
+          <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+            {workers.map(w => (
+              <div key={w.id} className="border rounded p-2 flex flex-col gap-1 relative overflow-hidden bg-gray-50/50">
+                <div className={`absolute top-0 left-0 w-1 h-full ${w.status === 'BUSY' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                <div className="flex justify-between items-center pl-2">
+                  <span className="font-mono text-[10px] text-gray-500 truncate" title={w.id}>{w.id.split('-').pop()}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${w.status === 'BUSY' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+                    {w.status}
+                  </span>
+                </div>
+                {w.status === 'BUSY' ? (
+                  <div className="pl-2 text-[10px] text-blue-600 font-mono truncate">
+                    {w.run_id}
+                  </div>
+                ) : (
+                  <div className="pl-2 text-[10px] text-gray-400 italic">IDLE</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1021,6 +1114,8 @@ export default function App() {
         return <TaskList tasks={tasks} onRunClick={handleOpenRunModal} />;
       case 'runs':
         return <RunList tasks={tasks} navigate={navigate} />;
+      case 'workers':
+        return <WorkerList />;
       case 'run_detail':
         return <RunDetail 
           runId={routeParams.id} 
@@ -1070,6 +1165,12 @@ export default function App() {
              className={`flex items-center w-full px-3 py-2 rounded-md transition-colors ${['runs', 'run_detail'].includes(route) ? 'bg-gray-800 text-white' : 'hover:bg-gray-800 hover:text-white'}`}
           >
             <Activity size={18} className="mr-3" /> 运行历史 (Runs)
+          </button>
+          <button 
+             onClick={() => navigate('workers')}
+             className={`flex items-center w-full px-3 py-2 rounded-md transition-colors ${route === 'workers' ? 'bg-gray-800 text-white' : 'hover:bg-gray-800 hover:text-white'}`}
+          >
+            <Cpu size={18} className="mr-3" /> 计算节点 (Nodes)
           </button>
         </nav>
 

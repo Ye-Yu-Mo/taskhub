@@ -5,13 +5,69 @@ from sqlalchemy import select, update, delete, func, text
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from .models import Base, Task, Run, RunQueue, RunStatus
+from .models import Base, Task, Run, RunQueue, RunStatus, WorkerHeartbeat
 
 # 默认数据库连接
 DB_URL = "sqlite+aiosqlite:///data/taskhub.db"
 
 class Storage:
     def __init__(self, db_url: str = DB_URL):
+        # 启用 WAL 模式以支持更高并发
+        self.engine = create_async_engine(db_url, echo=False)
+        self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
+
+    async def register_worker(self, worker_id: str, hostname: str, pid: int):
+        """Worker 启动注册"""
+        async with self.session_factory() as session:
+            async with session.begin():
+                # Upsert
+                worker = await session.get(WorkerHeartbeat, worker_id)
+                if not worker:
+                    worker = WorkerHeartbeat(
+                        worker_id=worker_id,
+                        hostname=hostname,
+                        pid=pid,
+                        status="IDLE"
+                    )
+                    session.add(worker)
+                else:
+                    worker.status = "IDLE"
+                    worker.current_run_id = None
+                    worker.last_heartbeat = datetime.now(timezone.utc)
+
+    async def heartbeat_worker(self, worker_id: str, status: str, current_run_id: Optional[str] = None):
+        """Worker 状态更新"""
+        async with self.session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(WorkerHeartbeat)
+                    .where(WorkerHeartbeat.worker_id == worker_id)
+                    .values(
+                        last_heartbeat=datetime.now(timezone.utc),
+                        status=status,
+                        current_run_id=current_run_id
+                    )
+                )
+
+    async def get_active_workers(self, timeout_seconds: int = 60) -> List[WorkerHeartbeat]:
+        """获取活跃的 Worker"""
+        threshold = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(WorkerHeartbeat).where(WorkerHeartbeat.last_heartbeat > threshold)
+            )
+            return result.scalars().all()
+
+    async def prune_dead_workers(self, timeout_seconds: int = 60):
+        """清理已死亡的 Worker 记录"""
+        threshold = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+        async with self.session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(WorkerHeartbeat).where(WorkerHeartbeat.last_heartbeat < threshold)
+                )
+
+    async def init_db(self):
         # 启用 WAL 模式以支持更高并发
         self.engine = create_async_engine(db_url, echo=False)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)

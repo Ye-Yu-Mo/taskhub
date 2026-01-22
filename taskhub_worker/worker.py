@@ -23,25 +23,59 @@ class Worker:
         self.running = True
         self.registry = Registry()
         self.registry.discover()
+        
+        # 内部状态跟踪
+        self._current_status = "IDLE"
+        self._current_run_id = None
 
     async def run(self):
         """Worker 主循环"""
         logger.info(f"Worker {self.worker_id} 已启动，准备处理任务。")
+        
+        hostname = self.worker_id.split('-')[1] if '-' in self.worker_id else "unknown"
+        await self.storage.register_worker(self.worker_id, hostname, os.getpid())
+        
+        # 启动后台心跳
+        heartbeat_task = asyncio.create_task(self.worker_status_loop())
+
         while self.running:
             try:
-                # 1. 尝试抢占任务
                 run_record = await self.storage.acquire_run_lease(self.worker_id, self.lease_seconds)
                 
                 if run_record:
-                    logger.info(f"抢占任务成功: {run_record.run_id} (Task: {run_record.task_id})")
-                    # 2. 执行任务
+                    logger.info(f"抢占任务成功: {run_record.run_id}")
+                    self._current_status = "BUSY"
+                    self._current_run_id = run_record.run_id
+                    
+                    # 强制立即刷新一次状态
+                    await self.storage.heartbeat_worker(self.worker_id, "BUSY", run_record.run_id)
+                    
                     await self.execute_run(run_record)
+                    
+                    self._current_status = "IDLE"
+                    self._current_run_id = None
+                    # 立即刷新回 IDLE
+                    await self.storage.heartbeat_worker(self.worker_id, "IDLE", None)
                 else:
-                    # 队列为空或受限，休息一下
                     await asyncio.sleep(2)
             except Exception as e:
                 logger.error(f"Worker 循环异常: {str(e)}")
                 await asyncio.sleep(5)
+        
+        heartbeat_task.cancel()
+
+    async def worker_status_loop(self):
+        """定期同步 Worker 状态到数据库"""
+        while self.running:
+            await asyncio.sleep(15) # 每15秒打卡一次
+            try:
+                await self.storage.heartbeat_worker(
+                    self.worker_id, 
+                    self._current_status, 
+                    self._current_run_id
+                )
+            except Exception as e:
+                logger.error(f"Worker 心跳失败: {e}")
 
     async def execute_run(self, run_record: Run):
         """执行单个 Run"""

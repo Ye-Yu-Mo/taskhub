@@ -87,3 +87,18 @@ class RunQueue(Base):
     __table_args__ = (
         Index("ix_queue_priority_time", "priority", "enqueued_at"),
     )
+
+class WorkerHeartbeat(Base):
+    """Worker 心跳表：监控节点存活状态"""
+    __tablename__ = "worker_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    hostname: Mapped[str] = mapped_column(String(100))
+    pid: Mapped[int] = mapped_column(Integer)
+    
+    # 状态信息
+    status: Mapped[str] = mapped_column(String(20)) # IDLE, BUSY
+    current_run_id: Mapped[Optional[str]] = mapped_column(String(36))
+    
+    started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
+    last_heartbeat: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

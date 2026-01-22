@@ -23,10 +23,19 @@ class Reaper:
         while self.running:
             try:
                 await self.reap_zombies()
+                await self.reap_workers()
             except Exception as e:
                 logger.error(f"Reaper 扫描异常: {e}")
             
             await asyncio.sleep(self.check_interval)
+
+    async def reap_workers(self):
+        """清理长时间失联的 Worker 记录"""
+        try:
+            # 如果 Worker 5分钟没心跳，视为已死
+            await self.storage.prune_dead_workers(timeout_seconds=300)
+        except Exception as e:
+            logger.error(f"清理 Worker 失败: {e}")
 
     async def reap_zombies(self):
         now = datetime.now(timezone.utc)
