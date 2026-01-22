@@ -209,3 +209,70 @@ __marimo__/
 *.db*
 data/
 tmp/
+
+# ======================
+# dependencies
+# ======================
+node_modules/
+.pnp
+.pnp.js
+
+# ======================
+# production build
+# ======================
+build/
+dist/
+out/
+
+# ======================
+# environment variables
+# ======================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ======================
+# logs
+# ======================
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+
+# ======================
+# editor / IDE
+# ======================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ======================
+# OS
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# cache
+# ======================
+.cache/
+.parcel-cache/
+.eslintcache
+.turbo/
+.vite/
+.next/
+.nuxt/
+
+# ======================
+# test coverage
+# ======================
+coverage/
+
+# ======================
+# misc
+# ======================
+*.local
