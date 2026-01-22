@@ -64,7 +64,294 @@ const SectionHeader = ({ title, rightContent }) => (
   </div>
 );
 
+// --- REPORT COMPONENTS ---
+
+const CsvCard = ({ runId, fileId, title }) => {
+  const [content, setContent] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const fileUrl = `/api/runs/${runId}/files/${fileId}`;
+
+  useEffect(() => {
+    axios.get(fileUrl, { responseType: 'text' })
+      .then(res => setContent(res.data))
+      .catch(err => console.error(err))
+      .finally(() => setLoading(false));
+  }, [fileUrl]);
+
+  if (loading) return <div className="h-32 bg-gray-50 animate-pulse rounded border"></div>;
+  if (!content) return null;
+
+  const rows = content.trim().split('\n').slice(0, 6).map(r => r.split(',')); // 只显示前6行
+
+  return (
+    <div className="bg-white border rounded shadow-sm overflow-hidden flex flex-col">
+      <div className="px-3 py-2 border-b bg-gray-50 font-medium text-sm flex justify-between items-center">
+        <span className="truncate">{title}</span>
+        <a href={fileUrl} target="_blank" download className="text-blue-600 hover:text-blue-800"><Download size={14}/></a>
+      </div>
+      <div className="overflow-x-auto p-2">
+        <table className="min-w-full text-xs text-left text-gray-600">
+          <thead>
+            <tr className="border-b">
+              {rows[0]?.map((h, i) => <th key={i} className="py-1 px-2 font-semibold bg-gray-50">{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(1).map((row, i) => (
+              <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
+                {row.map((c, j) => <td key={j} className="py-1 px-2 truncate max-w-[150px]">{c}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="bg-gray-50 px-3 py-1 text-xs text-gray-400 text-center border-t">
+        CSV 预览 (前 {rows.length} 行)
+      </div>
+    </div>
+  );
+};
+
+const ReportPage = ({ runId, onBack }) => {
+  const { data: artifacts } = useSWR(runId ? `/api/runs/${runId}/artifacts` : null, fetcher);
+
+  if (!artifacts) return <div className="p-8 text-center text-gray-500">正在生成报告...</div>;
+  if (artifacts.items.length === 0) return (
+    <div className="flex flex-col items-center justify-center h-full text-gray-400">
+      <div className="text-4xl mb-4">📭</div>
+      <div>暂无产物数据</div>
+      <button onClick={onBack} className="mt-4 text-blue-600 hover:underline">返回详情</button>
+    </div>
+  );
+
+  // 分类
+  const images = artifacts.items.filter(a => a.kind === 'image' || a.path?.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i));
+  const tables = artifacts.items.filter(a => a.mime === 'text/csv' || a.path?.endsWith('.csv'));
+  const htmls = artifacts.items.filter(a => a.path?.endsWith('.html'));
+  const others = artifacts.items.filter(a => !images.includes(a) && !tables.includes(a) && !htmls.includes(a));
+
+  return (
+    <div className="min-h-screen bg-gray-100 flex flex-col">
+      {/* Header */}
+      <div className="bg-white border-b px-6 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="text-gray-500 hover:text-gray-800 p-1 rounded hover:bg-gray-100">
+             <ChevronRight className="rotate-180" size={20} />
+          </button>
+          <h1 className="text-xl font-bold text-gray-900">运行报告 (Report)</h1>
+          <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full font-mono">{runId}</span>
+        </div>
+        <div className="text-sm text-gray-500">
+          共 {artifacts.items.length} 个产物
+        </div>
+      </div>
+
+      <div className="p-8 space-y-8 max-w-7xl mx-auto w-full">
+        
+        {/* HTML Reports (First Class) */}
+        {htmls.length > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><FileText size={18}/> 网页报告</h3>
+            <div className="grid grid-cols-1 gap-6">
+              {htmls.map(h => (
+                <div key={h.artifact_id} className="bg-white rounded shadow-sm border overflow-hidden h-[600px]">
+                   <div className="bg-gray-50 px-4 py-2 border-b text-sm font-medium flex justify-between">
+                     <span>{h.title}</span>
+                     <a href={`/api/runs/${runId}/files/${h.file_id}`} target="_blank" className="text-blue-600 hover:underline">全屏打开</a>
+                   </div>
+                   <iframe 
+                     src={`/api/runs/${runId}/files/${h.file_id}`} 
+                     className="w-full h-full border-0" 
+                     sandbox="allow-scripts allow-same-origin"
+                   />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Charts / Images */}
+        {images.length > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Layers size={18}/> 图表与图片</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {images.map(img => (
+                <div key={img.artifact_id} className="bg-white rounded border shadow-sm p-2 hover:shadow-md transition-shadow">
+                  <div className="aspect-video bg-gray-50 rounded mb-2 flex items-center justify-center overflow-hidden cursor-pointer">
+                    <img 
+                      src={`/api/runs/${runId}/files/${img.file_id}`} 
+                      alt={img.title} 
+                      className="object-contain w-full h-full hover:scale-105 transition-transform duration-300"
+                      onClick={() => window.open(`/api/runs/${runId}/files/${img.file_id}`, '_blank')}
+                    />
+                  </div>
+                  <div className="px-2 pb-1 text-sm font-medium text-gray-700 truncate" title={img.title}>{img.title}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Data Tables */}
+        {tables.length > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Database size={18}/> 数据预览</h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {tables.map(t => (
+                <CsvCard key={t.artifact_id} runId={runId} fileId={t.file_id} title={t.title} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Other Files */}
+        {others.length > 0 && (
+          <div className="space-y-4">
+             <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><FileText size={18}/> 其他文件</h3>
+             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {others.map(o => (
+                  <div key={o.artifact_id} className="bg-white border p-3 rounded flex items-center gap-3 shadow-sm hover:shadow-md">
+                    <div className="bg-gray-100 p-2 rounded text-gray-500"><Download size={16}/></div>
+                    <div className="overflow-hidden">
+                      <div className="text-sm font-medium text-gray-900 truncate">{o.title}</div>
+                      <a href={`/api/runs/${runId}/files/${o.file_id}`} download className="text-xs text-blue-600 hover:underline">点击下载</a>
+                    </div>
+                  </div>
+                ))}
+             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // 2. Page Components
+
+const PreviewPage = ({ runId, fileId, onBack }) => {
+  const { data: artifacts } = useSWR(runId ? `/api/runs/${runId}/artifacts` : null, fetcher);
+  const [content, setContent] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // 找到对应的 artifact 元数据
+  const artifact = artifacts?.items?.find(a => a.file_id === fileId);
+  const fileUrl = `/api/runs/${runId}/files/${fileId}`;
+
+  useEffect(() => {
+    if (!artifact) return;
+    
+    // 如果是文本类(CSV/Log/Text)，预取内容
+    if (artifact.mime === 'text/csv' || artifact.kind === 'text') {
+      setLoading(true);
+      axios.get(fileUrl, { responseType: 'text' })
+        .then(res => setContent(res.data))
+        .catch(err => console.error(err))
+        .finally(() => setLoading(false));
+    }
+  }, [artifact, fileUrl]);
+
+  if (!artifacts) return <div className="p-8 text-center">加载元数据...</div>;
+  if (!artifact) return <div className="p-8 text-center text-red-500">文件不存在</div>;
+
+  const renderContent = () => {
+    // 图片
+    if (artifact.kind === 'image' || artifact.path?.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)) {
+      return (
+        <div className="flex justify-center items-center h-full bg-gray-100 rounded border">
+           <img src={fileUrl} alt={artifact.title} className="max-w-full max-h-[80vh] object-contain shadow-lg" />
+        </div>
+      );
+    }
+    
+    // HTML
+    if (artifact.path?.endsWith('.html')) {
+       return (
+         <iframe 
+           src={fileUrl} 
+           className="w-full h-[80vh] border rounded bg-white" 
+           title="Preview"
+           sandbox="allow-scripts" 
+         />
+       );
+    }
+
+    // CSV
+    if (artifact.mime === 'text/csv' || artifact.path?.endsWith('.csv')) {
+       if (loading) return <div className="text-gray-500 animate-pulse">正在解析 CSV...</div>;
+       if (!content) return <div className="text-gray-400">无内容</div>;
+       
+       const rows = content.trim().split('\n').map(row => row.split(','));
+       return (
+         <div className="overflow-auto border rounded max-h-[80vh]">
+           <table className="min-w-full divide-y divide-gray-200 text-sm">
+             <thead className="bg-gray-50 sticky top-0">
+               <tr>
+                 {rows[0]?.map((header, i) => (
+                   <th key={i} className="px-4 py-2 text-left font-medium text-gray-500 uppercase tracking-wider border-r last:border-r-0">
+                     {header}
+                   </th>
+                 ))}
+               </tr>
+             </thead>
+             <tbody className="bg-white divide-y divide-gray-200 font-mono">
+               {rows.slice(1).map((row, i) => (
+                 <tr key={i} className="hover:bg-blue-50">
+                   {row.map((cell, j) => (
+                     <td key={j} className="px-4 py-2 whitespace-nowrap border-r last:border-r-0 text-gray-700">
+                       {cell}
+                     </td>
+                   ))}
+                 </tr>
+               ))}
+             </tbody>
+           </table>
+           <div className="p-2 text-xs text-gray-400 bg-gray-50 border-t">
+             显示前 {rows.length} 行
+           </div>
+         </div>
+       );
+    }
+
+    // 默认 fallback
+    return (
+      <div className="flex flex-col items-center justify-center h-64 bg-gray-50 border rounded border-dashed">
+        <div className="text-gray-500 mb-4">该文件类型暂不支持预览</div>
+        <a 
+          href={fileUrl} 
+          target="_blank" 
+          download 
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2"
+        >
+          <Download size={16} /> 下载查看
+        </a>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4 h-full flex flex-col">
+       <div className="flex items-center gap-4 border-b pb-4">
+          <button onClick={onBack} className="text-gray-500 hover:text-gray-800 flex items-center gap-1 text-sm">
+            <ChevronRight className="rotate-180" size={16} /> 返回详情
+          </button>
+          <h1 className="text-xl font-bold text-gray-900">{artifact.title}</h1>
+          <div className="ml-auto flex gap-2">
+             <a 
+               href={fileUrl} 
+               target="_blank" 
+               download 
+               className="px-3 py-1.5 border rounded text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-600"
+             >
+               <Download size={14} /> 下载原始文件
+             </a>
+          </div>
+       </div>
+       <div className="flex-1 overflow-hidden">
+          {renderContent()}
+       </div>
+    </div>
+  );
+};
 
 const Dashboard = ({ runs, tasks, navigate }) => {
   const activeRuns = runs.filter(r => r.status === 'RUNNING').length;
@@ -172,27 +459,49 @@ const TaskList = ({ tasks, onRunClick }) => {
   );
 };
 
-const RunList = ({ runs, tasks, navigate }) => {
-  const [filterStatus, setFilterStatus] = useState('ALL');
+const RunList = ({ tasks, navigate }) => {
+  const [filterTask, setFilterTask] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
   
-  const filteredRuns = runs.filter(r => filterStatus === 'ALL' || r.status === filterStatus);
+  // 构建查询 URL
+  const queryParams = new URLSearchParams({ limit: 50 });
+  if (filterTask) queryParams.append('task_id', filterTask);
+  if (filterStatus) queryParams.append('status', filterStatus);
+  
+  const { data: runs, error } = useSWR(`/api/runs?${queryParams.toString()}`, fetcher, { refreshInterval: 5000 });
+
+  if (error) return <div className="text-red-500">加载失败</div>;
+  if (!runs) return <div className="text-gray-500">加载中...</div>;
 
   return (
     <div className="space-y-4">
       <SectionHeader 
         title="运行历史 (History)" 
         rightContent={
-          <select 
-            className="border text-sm rounded px-2 py-1 bg-white"
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-          >
-            <option value="ALL">所有状态</option>
-            <option value="RUNNING">运行中</option>
-            <option value="QUEUED">排队中</option>
-            <option value="SUCCEEDED">成功</option>
-            <option value="FAILED">失败</option>
-          </select>
+          <div className="flex gap-2">
+            <select 
+              className="border text-sm rounded px-2 py-1 bg-white min-w-[120px]"
+              value={filterTask}
+              onChange={(e) => setFilterTask(e.target.value)}
+            >
+              <option value="">所有任务</option>
+              {tasks.map(t => (
+                <option key={t.task_id} value={t.task_id}>{t.name}</option>
+              ))}
+            </select>
+            <select 
+              className="border text-sm rounded px-2 py-1 bg-white"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+            >
+              <option value="">所有状态</option>
+              <option value="RUNNING">运行中</option>
+              <option value="QUEUED">排队中</option>
+              <option value="SUCCEEDED">成功</option>
+              <option value="FAILED">失败</option>
+              <option value="CANCELED">已取消</option>
+            </select>
+          </div>
         }
       />
       
@@ -208,29 +517,37 @@ const RunList = ({ runs, tasks, navigate }) => {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {filteredRuns.map(run => (
-              <tr 
-                key={run.run_id} 
-                className="hover:bg-blue-50 cursor-pointer transition-colors"
-                onClick={() => navigate('run_detail', { id: run.run_id })}
-              >
-                <td className="px-4 py-2 whitespace-nowrap text-xs font-mono text-blue-600 font-medium">
-                  {run.run_id}
-                </td>
-                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 truncate">
-                  {tasks.find(t => t.task_id === run.task_id)?.name || run.task_id}
-                </td>
-                <td className="px-4 py-2 whitespace-nowrap">
-                  <StatusBadge status={run.status} />
-                </td>
-                <td className="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">
-                  {run.duration || '-'}
-                </td>
-                <td className="px-4 py-2 whitespace-nowrap text-right text-xs text-gray-400">
-                  {new Date(run.created_at).toLocaleString()}
+            {runs.length === 0 ? (
+              <tr>
+                <td colSpan="5" className="px-4 py-8 text-center text-gray-400 text-sm">
+                  没有找到符合条件的记录
                 </td>
               </tr>
-            ))}
+            ) : (
+              runs.map(run => (
+                <tr 
+                  key={run.run_id} 
+                  className="hover:bg-blue-50 cursor-pointer transition-colors"
+                  onClick={() => navigate('run_detail', { id: run.run_id })}
+                >
+                  <td className="px-4 py-2 whitespace-nowrap text-xs font-mono text-blue-600 font-medium">
+                    {run.run_id}
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 truncate">
+                    {tasks.find(t => t.task_id === run.task_id)?.name || run.task_id}
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap">
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">
+                    {run.duration || '-'}
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap text-right text-xs text-gray-400">
+                    {new Date(run.created_at).toLocaleString()}
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -274,7 +591,7 @@ const LogViewer = ({ runId, status }) => {
   );
 };
 
-const ArtifactsViewer = ({ runId }) => {
+const ArtifactsViewer = ({ runId, onPreview }) => {
   const { data: artifacts, error } = useSWR(runId ? `/api/runs/${runId}/artifacts` : null, fetcher);
 
   if (error) return <div className="text-red-500">加载产物失败</div>;
@@ -296,28 +613,39 @@ const ArtifactsViewer = ({ runId }) => {
                <FileText size={16} />}
             </div>
             <div>
-              <div className="font-medium text-sm text-blue-600 hover:underline cursor-pointer" onClick={() => handleDownload(art.file_id)}>
-                {art.title}
+              <div 
+                className="font-medium text-sm text-blue-600 hover:underline cursor-pointer flex items-center gap-2" 
+                onClick={() => onPreview(art.file_id)}
+              >
+                {art.title} <span className="text-xs text-gray-400 font-normal no-underline">(点击预览)</span>
               </div>
               <div className="text-xs text-gray-500">
                 {art.size_bytes ? `${(art.size_bytes / 1024).toFixed(1)} KB` : '未知大小'} • {art.kind.toUpperCase()}
               </div>
             </div>
           </div>
-          <button 
-            onClick={() => handleDownload(art.file_id)}
-            className="text-gray-400 hover:text-gray-600 flex items-center gap-1 text-xs"
-          >
-            <Download size={14} /> 下载
-          </button>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => onPreview(art.file_id)}
+              className="text-gray-500 hover:text-blue-600 px-2 py-1 border rounded text-xs transition-colors"
+            >
+              预览
+            </button>
+            <button 
+              onClick={() => handleDownload(art.file_id)}
+              className="text-gray-500 hover:text-gray-800 px-2 py-1 border rounded text-xs flex items-center gap-1 transition-colors"
+            >
+              <Download size={14} />
+            </button>
+          </div>
         </div>
       ))}
     </div>
   );
 };
 
-const RunDetail = ({ runId, onNavigateBack }) => {
-  const { data: run, error: runError } = useSWR(runId ? `/api/runs/${runId}` : null, fetcher, { refreshInterval: 2000 });
+const RunDetail = ({ runId, onNavigateBack, onNavigatePreview, onNavigateReport }) => {
+  const { data: run, error: runError } = useSWR(runId ? `/api/runs/${runId}` : null, fetcher, { refreshInterval: 1000 });
   const { data: tasks } = useSWR('/api/tasks', fetcher);
   
   const [activeTab, setActiveTab] = useState('overview');
@@ -342,7 +670,7 @@ const RunDetail = ({ runId, onNavigateBack }) => {
       }
     };
 
-    const timer = setInterval(fetchEvents, 1000);
+    const timer = setInterval(fetchEvents, 500);
     return () => clearInterval(timer);
   }, [runId, cursor, run?.status]);
 
@@ -401,6 +729,12 @@ const RunDetail = ({ runId, onNavigateBack }) => {
             )}
           </div>
           <div className="flex gap-2">
+            <button 
+               onClick={onNavigateReport}
+               className="px-3 py-1.5 bg-blue-600 text-white border border-blue-600 rounded text-sm font-medium hover:bg-blue-700 shadow-sm flex items-center gap-2"
+            >
+               <Layers size={14} /> 查看完整报告
+            </button>
             {(run.status === 'RUNNING' || run.status === 'QUEUED') && (
               <button 
                 onClick={handleCancel}
@@ -476,7 +810,7 @@ const RunDetail = ({ runId, onNavigateBack }) => {
           </div>
         )}
         {activeTab === 'artifacts' && (
-           <ArtifactsViewer runId={run.run_id} />
+           <ArtifactsViewer runId={run.run_id} onPreview={onNavigatePreview} />
         )}
       </div>
     </div>
@@ -493,25 +827,104 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
     // Populate defaults
     const defaults = {};
     Object.entries(properties).forEach(([key, conf]) => {
-        defaults[key] = conf.default;
+        // Pydantic v2 schema uses 'default' key
+        if (conf.default !== undefined) {
+             defaults[key] = conf.default;
+        } else if (conf.type === 'boolean') {
+             defaults[key] = false;
+        } else if (conf.type === 'array') {
+             defaults[key] = [];
+        }
     });
     setFormData(defaults);
   }, [task]);
 
-  const handleChange = (key, val) => {
-    // Basic type conversion
-    const conf = properties[key];
-    if (conf.type === 'integer' || conf.type === 'number') {
-        setFormData(prev => ({ ...prev, [key]: Number(val) }));
-    } else {
-        setFormData(prev => ({ ...prev, [key]: val }));
+  const handleChange = (key, val, type) => {
+    let finalVal = val;
+    if (type === 'integer' || type === 'number') {
+        finalVal = val === '' ? 0 : Number(val);
+    } else if (type === 'boolean') {
+        finalVal = val; // val is checked boolean
+    } else if (type === 'array') {
+        // Simple comma separated
+        finalVal = val.split(',').map(s => s.trim()).filter(s => s);
     }
+    setFormData(prev => ({ ...prev, [key]: finalVal }));
+  };
+
+  const renderInput = (key, config) => {
+    // Enum (Select)
+    if (config.enum || (config.allOf && config.allOf[0]?.enum)) { 
+      // Handle Pydantic enum schema variations if necessary, usually config.enum is present
+      const options = config.enum || config.allOf[0].enum;
+      return (
+        <select 
+          className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+          value={formData[key] || ''}
+          onChange={(e) => handleChange(key, e.target.value, 'string')}
+        >
+          {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+        </select>
+      );
+    }
+
+    // Boolean (Checkbox)
+    if (config.type === 'boolean') {
+        return (
+            <div className="flex items-center h-9">
+                <input 
+                    type="checkbox"
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    checked={!!formData[key]}
+                    onChange={(e) => handleChange(key, e.target.checked, 'boolean')}
+                />
+                <span className="ml-2 text-sm text-gray-500">Enable</span>
+            </div>
+        );
+    }
+
+    // Number / Integer
+    if (config.type === 'integer' || config.type === 'number') {
+        return (
+            <input 
+              type="number"
+              step={config.type === 'integer' ? "1" : "0.01"}
+              className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+              value={formData[key] !== undefined ? formData[key] : ''}
+              onChange={(e) => handleChange(key, e.target.value, config.type)}
+            />
+        );
+    }
+
+    // Array (Comma separated text)
+    if (config.type === 'array') {
+        const displayVal = Array.isArray(formData[key]) ? formData[key].join(', ') : '';
+        return (
+            <input 
+              type="text"
+              placeholder="value1, value2, ..."
+              className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+              value={displayVal}
+              onChange={(e) => handleChange(key, e.target.value, 'array')}
+            />
+        );
+    }
+
+    // String (Default)
+    return (
+        <input 
+          type="text"
+          className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+          value={formData[key] || ''}
+          onChange={(e) => handleChange(key, e.target.value, 'string')}
+        />
+    );
   };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden">
-        <div className="px-6 py-4 border-b flex justify-between items-center bg-gray-50">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="px-6 py-4 border-b flex justify-between items-center bg-gray-50 flex-none">
           <div>
             <h3 className="text-lg font-bold text-gray-900">运行: {task.name}</h3>
             <p className="text-xs text-gray-500 font-mono">{task.task_id}</p>
@@ -519,40 +932,32 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
           <button onClick={onClose}><XCircle className="text-gray-400 hover:text-gray-600" /></button>
         </div>
         
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
           {Object.entries(properties).map(([key, config]) => (
             <div key={key}>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {key} <span className="text-gray-400 font-normal">({config.type})</span>
-              </label>
-              {config.enum ? (
-                <select 
-                  className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                  value={formData[key] || ''}
-                  onChange={(e) => handleChange(key, e.target.value)}
-                >
-                  {config.enum.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              ) : (
-                <input 
-                  type={(config.type === 'integer' || config.type === 'number') ? 'number' : 'text'}
-                  className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono"
-                  value={formData[key] || ''}
-                  onChange={(e) => handleChange(key, e.target.value)}
-                />
-              )}
+              <div className="flex justify-between mb-1">
+                  <label className="block text-sm font-medium text-gray-700">
+                    {config.title || key} 
+                  </label>
+                  <span className="text-xs text-gray-400 font-mono">
+                    {config.type}{config.type === 'array' ? '[]' : ''}
+                  </span>
+              </div>
+              {config.description && <p className="text-xs text-gray-500 mb-2">{config.description}</p>}
+              
+              {renderInput(key, config)}
             </div>
           ))}
           
           <div className="mt-4 pt-4 border-t">
             <label className="block text-xs font-bold text-gray-500 uppercase mb-2">JSON 预览</label>
-            <div className="bg-gray-800 text-green-400 p-3 rounded text-xs font-mono">
+            <div className="bg-gray-800 text-green-400 p-3 rounded text-xs font-mono overflow-x-auto">
               {JSON.stringify(formData, null, 2)}
             </div>
           </div>
         </div>
 
-        <div className="bg-gray-50 px-6 py-4 flex justify-end gap-3 border-t">
+        <div className="bg-gray-50 px-6 py-4 flex justify-end gap-3 border-t flex-none">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">取消</button>
           <button 
             onClick={() => onSubmit(task.task_id, formData)}
@@ -615,9 +1020,25 @@ export default function App() {
       case 'tasks':
         return <TaskList tasks={tasks} onRunClick={handleOpenRunModal} />;
       case 'runs':
-        return <RunList runs={runs} tasks={tasks} navigate={navigate} />;
+        return <RunList tasks={tasks} navigate={navigate} />;
       case 'run_detail':
-        return <RunDetail runId={routeParams.id} onNavigateBack={() => navigate('runs')} />;
+        return <RunDetail 
+          runId={routeParams.id} 
+          onNavigateBack={() => navigate('runs')} 
+          onNavigatePreview={(fileId) => navigate('preview', { runId: routeParams.id, fileId })}
+          onNavigateReport={() => navigate('report', { runId: routeParams.id })}
+        />;
+      case 'report':
+        return <ReportPage 
+          runId={routeParams.runId} 
+          onBack={() => navigate('run_detail', { id: routeParams.runId })} 
+        />;
+      case 'preview':
+        return <PreviewPage 
+          runId={routeParams.runId} 
+          fileId={routeParams.fileId} 
+          onBack={() => navigate('run_detail', { id: routeParams.runId })} 
+        />;
       default:
         return <div>Not Found</div>;
     }

@@ -43,7 +43,8 @@ async def lifespan(app: FastAPI):
                         schema_hash=schema_hash,
                         version=task_spec.version,
                         concurrency_limit=task_spec.concurrency_limit,
-                        timeout_seconds=task_spec.timeout_seconds
+                        timeout_seconds=task_spec.timeout_seconds,
+                        is_enabled=task_spec.is_enabled
                     ))
                 else:
                     # 如果元信息变了，更新它
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
                     existing.schema_hash = schema_hash
                     existing.version = task_spec.version
                     existing.concurrency_limit = task_spec.concurrency_limit
+                    existing.is_enabled = task_spec.is_enabled
     
     yield
     # 关闭时清理（如有需要）
@@ -142,7 +144,22 @@ async def get_run(run_id: str, storage: Storage = Depends(get_db_storage)):
         run = await session.get(Run, run_id)
         if not run:
             raise HTTPException(status_code=404, detail="运行记录不存在")
-        return run
+        
+        # 简单计算 duration
+        # 注意：这里返回的对象是 SQLAlchemy 模型，需要转成 Pydantic 模型或者由 FastAPI 自动转换
+        # 为了注入 computed field，最好先转成 dict 或者让 Pydantic model 的 validator 处理
+        # 这里我们利用 Pydantic 的 from_attributes，但 duration 不是 DB 字段
+        # 我们可以动态赋值
+        
+        run_dto = RunRead.model_validate(run)
+        if run.started_at and run.finished_at:
+            delta = run.finished_at - run.started_at
+            run_dto.duration = str(delta).split('.')[0] # 去掉微秒
+        elif run.started_at and run.status == RunStatus.RUNNING:
+            delta = datetime.now(timezone.utc) - run.started_at.replace(tzinfo=timezone.utc)
+            run_dto.duration = str(delta).split('.')[0]
+            
+        return run_dto
 
 @api_app.post("/api/runs/{run_id}/cancel")
 async def cancel_run(run_id: str, storage: Storage = Depends(get_db_storage)):
@@ -153,7 +170,7 @@ async def cancel_run(run_id: str, storage: Storage = Depends(get_db_storage)):
             await session.execute(
                 update(Run)
                 .where(Run.run_id == run_id)
-                .values(cancel_requested_at=datetime.utcnow())
+                .values(cancel_requested_at=datetime.now(timezone.utc))
             )
 
 @api_app.get("/api/runs/{run_id}/events", response_model=EventList)
@@ -213,13 +230,25 @@ async def download_file(run_id: str, file_id: str, storage: Storage = Depends(ge
     # 1. 查找 file_id 对应的 path
     target_path = None
     filename = "download"
+    media_type = None
     try:
         with open(artifacts_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             for item in data.get("items", []):
                 if item["file_id"] == file_id:
                     target_path = item["path"]
-                    filename = item.get("title", file_id) + (".csv" if item.get("mime") == "text/csv" else "")
+                    # 优先使用 title 作为文件名，如果有 mime 则补后缀（简略逻辑）
+                    filename = item.get("title", file_id)
+                    media_type = item.get("mime")
+                    # 简单的后缀补全
+                    if media_type == "text/csv" and not filename.endswith(".csv"):
+                        filename += ".csv"
+                    elif media_type == "text/html" and not filename.endswith(".html"):
+                        filename += ".html"
+                    elif media_type == "image/svg+xml" and not filename.endswith(".svg"):
+                        filename += ".svg"
+                    elif media_type == "image/png" and not filename.endswith(".png"):
+                        filename += ".png"
                     break
     except:
         raise HTTPException(status_code=500, detail="Index corruption")
@@ -228,15 +257,27 @@ async def download_file(run_id: str, file_id: str, storage: Storage = Depends(ge
         raise HTTPException(status_code=404, detail="File ID not found in index")
     
     # 2. 拼接真实路径并校验
-    # 注意：target_path 是相对路径 (如 files/result.csv)
     abs_path = (Path(f"data/runs/{run_id}") / target_path).resolve()
     base_dir = Path(f"data/runs/{run_id}").resolve()
     
-    # 防止目录穿越 (Double Check)
     if not str(abs_path).startswith(str(base_dir)):
         raise HTTPException(status_code=403, detail="Access denied")
         
     if not abs_path.exists():
         raise HTTPException(status_code=404, detail="File on disk missing")
         
-    return FileResponse(abs_path, filename=filename)
+    # 智能判断 Content-Disposition
+    # 默认是 attachment (下载)，对于可预览类型设为 inline
+    previewable_types = [
+        "text/html", 
+        "text/plain", 
+        "image/svg+xml", 
+        "image/png", 
+        "image/jpeg", 
+        "image/gif",
+        "image/webp",
+        "application/pdf"
+    ]
+    disposition = "inline" if media_type in previewable_types else "attachment"
+
+    return FileResponse(abs_path, filename=filename, media_type=media_type, content_disposition_type=disposition)

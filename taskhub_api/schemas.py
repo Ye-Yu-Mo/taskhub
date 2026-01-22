@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Any, Dict, List
-from datetime import datetime
+from datetime import datetime, timezone
 from .models import RunStatus
 
 class TaskBase(BaseModel):
@@ -32,12 +32,20 @@ class RunRead(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    deadline_at: Optional[datetime] = None
     params: Dict[str, Any]
     exit_code: Optional[int] = None
     error: Optional[str] = None
+    lease_owner: Optional[str] = None
     
     # 辅助前端显示
     duration: Optional[str] = None 
+
+    @field_validator('created_at', 'started_at', 'finished_at', 'deadline_at', mode='before')
+    def ensure_utc(cls, v):
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
     class Config:
         from_attributes = True
@@ -48,6 +56,12 @@ class EventRead(BaseModel):
     type: str
     run_id: str
     data: Dict[str, Any]
+
+    @field_validator('ts', mode='before')
+    def ensure_utc(cls, v):
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 class EventList(BaseModel):
     items: List[EventRead]

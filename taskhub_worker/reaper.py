@@ -2,7 +2,7 @@ import asyncio
 import os
 import signal
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, or_
 from taskhub_api.storage import Storage, DB_URL
 from taskhub_api.models import Run, RunStatus
@@ -29,7 +29,7 @@ class Reaper:
             await asyncio.sleep(self.check_interval)
 
     async def reap_zombies(self):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         threshold = now - timedelta(seconds=self.lease_buffer)
 
         async with self.storage.session_factory() as session:

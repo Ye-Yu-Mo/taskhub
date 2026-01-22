@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Any, Dict
 from sqlalchemy import String, Integer, DateTime, JSON, Text, ForeignKey, Index
@@ -33,8 +33,8 @@ class Task(Base):
     timeout_seconds: Mapped[Optional[int]] = mapped_column(Integer)
     is_enabled: Mapped[bool] = mapped_column(default=True)
 
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 class Run(Base):
     """运行记录表：记录每次执行的状态与生命周期"""
@@ -48,7 +48,7 @@ class Run(Base):
     status: Mapped[RunStatus] = mapped_column(String(20), default=RunStatus.QUEUED)
     
     # 时间线
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     deadline_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -82,7 +82,7 @@ class RunQueue(Base):
 
     run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     priority: Mapped[int] = mapped_column(Integer, default=0)
-    enqueued_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    enqueued_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_queue_priority_time", "priority", "enqueued_at"),

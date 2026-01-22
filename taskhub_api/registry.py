@@ -17,6 +17,7 @@ class TaskSpec(BaseModel):
     version: str = "0.1.0"
     concurrency_limit: Optional[int] = None
     timeout_seconds: Optional[int] = None
+    is_enabled: bool = True
 
 class Registry:
     def __init__(self, tasks_dir: str = "tasks"):

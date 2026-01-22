@@ -3,7 +3,7 @@ from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import select, update, delete, func, text
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .models import Base, Task, Run, RunQueue, RunStatus
 
@@ -51,7 +51,7 @@ class Storage:
         Worker 核心逻辑：从队列中取出一个任务并锁定。
         包含并发控制逻辑。
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         lease_expiry = now + timedelta(seconds=lease_seconds)
 
         async with self.session_factory() as session:
@@ -115,7 +115,7 @@ class Storage:
 
     async def extend_lease(self, run_id: str, worker_id: str, lease_seconds: int = 30) -> bool:
         """Worker 心跳：续租"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         new_expiry = now + timedelta(seconds=lease_seconds)
         
         async with self.session_factory() as session:
@@ -150,7 +150,7 @@ class Storage:
 
     async def update_run_status(self, run_id: str, status: RunStatus, exit_code: Optional[int] = None, error: Optional[str] = None):
         """Worker 结束任务"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         async with self.session_factory() as session:
             async with session.begin():
                 values = {
