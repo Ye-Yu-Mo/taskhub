@@ -1,0 +1,84 @@
+{
+  "project": "TaskHub",
+  "version": "0.1",
+  "status": "design_approved",
+  "features": {
+    "core": [
+      {
+        "id": "task_registry",
+        "name": "Task Registration",
+        "description": "Auto-discovery of tasks from python modules with Pydantic schema generation",
+        "status": "planned"
+      },
+      {
+        "id": "run_management",
+        "name": "Run Lifecycle",
+        "description": "Create, queue, execute, and track status of task runs",
+        "status": "planned"
+      },
+      {
+        "id": "execution_engine",
+        "name": "Subprocess Worker",
+        "description": "Isolated subprocess execution with non-blocking/async IO capture and Process Group/Session ID creation for full tree control",
+        "status": "planned"
+      },
+      {
+        "id": "concurrency_control",
+        "name": "Concurrency Limits",
+        "description": "Global and per-task concurrency enforcement via SQLite transactions",
+        "status": "planned"
+      },
+      {
+        "id": "event_system",
+        "name": "Event Stream",
+        "description": "Structured logging (log, progress, metric) via stdout protocol parsing",
+        "status": "planned"
+      },
+      {
+        "id": "artifacts",
+        "name": "Artifact Management",
+        "description": "Standardized file outputs with JSON indexing for frontend rendering",
+        "status": "planned"
+      },
+      {
+        "id": "crash_recovery",
+        "name": "Reaper & Lease",
+        "description": "Heartbeat mechanism with crash detection and cleanup via Process Groups/Session IDs to reap entire process trees",
+        "status": "planned"
+      }
+    ],
+    "api": [
+      {
+        "method": "GET",
+        "path": "/api/tasks",
+        "description": "List available tasks"
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/{id}/runs",
+        "description": "Trigger a new run"
+      },
+      {
+        "method": "GET",
+        "path": "/api/runs/{id}",
+        "description": "Get run details and status"
+      },
+      {
+        "method": "GET",
+        "path": "/api/runs/{id}/events",
+        "description": "Fetch structured events"
+      },
+      {
+        "method": "POST",
+        "path": "/api/runs/{id}/cancel",
+        "description": "Request run cancellation"
+      }
+    ]
+  },
+  "technical_constraints": {
+    "database": "SQLite",
+    "queue": "SQLite Table",
+    "ipc": "Stdout Pipe + Filesystem",
+    "no_dependencies": ["Redis", "Celery"]
+  }
+}

@@ -1,0 +1,20 @@
+[project]
+name = "taskhub"
+version = "0.1.0"
+description = "Single-machine task runner with good taste"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "typer",
+    "pydantic",
+    "pydantic-settings",
+    "aiosqlite",
+    "sqlalchemy[asyncio]",
+    "pyyaml",
+    "python-multipart",
+]
+
+[project.scripts]
+taskhub = "taskhub_api.main:app"
