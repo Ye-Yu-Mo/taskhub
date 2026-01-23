@@ -3,6 +3,7 @@ from typing import Optional, Any, Dict, List
 from datetime import datetime, timezone
 from .models import RunStatus
 
+
 class TaskBase(BaseModel):
     task_id: str
     name: str
@@ -13,6 +14,7 @@ class TaskBase(BaseModel):
     timeout_seconds: Optional[int] = None
     is_enabled: bool = True
 
+
 class TaskRead(TaskBase):
     params_schema: Dict[str, Any]
     # 增加一个实时字段，用于前端显示
@@ -21,8 +23,10 @@ class TaskRead(TaskBase):
     class Config:
         from_attributes = True
 
+
 class RunCreate(BaseModel):
     params: Dict[str, Any]
+
 
 class RunRead(BaseModel):
     run_id: str
@@ -37,11 +41,13 @@ class RunRead(BaseModel):
     exit_code: Optional[int] = None
     error: Optional[str] = None
     lease_owner: Optional[str] = None
-    
-    # 辅助前端显示
-    duration: Optional[str] = None 
 
-    @field_validator('created_at', 'started_at', 'finished_at', 'deadline_at', mode='before')
+    # 辅助前端显示
+    duration: Optional[str] = None
+
+    @field_validator(
+        "created_at", "started_at", "finished_at", "deadline_at", mode="before"
+    )
     def ensure_utc(cls, v):
         if isinstance(v, datetime) and v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
@@ -50,6 +56,7 @@ class RunRead(BaseModel):
     class Config:
         from_attributes = True
 
+
 class EventRead(BaseModel):
     seq: int
     ts: datetime
@@ -57,15 +64,17 @@ class EventRead(BaseModel):
     run_id: str
     data: Dict[str, Any]
 
-    @field_validator('ts', mode='before')
+    @field_validator("ts", mode="before")
     def ensure_utc(cls, v):
         if isinstance(v, datetime) and v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
         return v
 
+
 class EventList(BaseModel):
     items: List[EventRead]
     next_cursor: int
+
 
 class ArtifactItem(BaseModel):
     artifact_id: str
@@ -75,6 +84,7 @@ class ArtifactItem(BaseModel):
     path: Optional[str] = None
     mime: Optional[str] = None
     size_bytes: Optional[int] = None
+
 
 class ArtifactsRead(BaseModel):
     run_id: str

@@ -10,6 +10,7 @@ from .models import Base, Task, Run, RunQueue, RunStatus, WorkerHeartbeat
 # 默认数据库连接
 DB_URL = "sqlite+aiosqlite:///data/taskhub.db"
 
+
 class Storage:
     def __init__(self, db_url: str = DB_URL):
         # 启用 WAL 模式以支持更高并发
@@ -24,10 +25,7 @@ class Storage:
                 worker = await session.get(WorkerHeartbeat, worker_id)
                 if not worker:
                     worker = WorkerHeartbeat(
-                        worker_id=worker_id,
-                        hostname=hostname,
-                        pid=pid,
-                        status="IDLE"
+                        worker_id=worker_id, hostname=hostname, pid=pid, status="IDLE"
                     )
                     session.add(worker)
                 else:
@@ -35,7 +33,9 @@ class Storage:
                     worker.current_run_id = None
                     worker.last_heartbeat = datetime.now(timezone.utc)
 
-    async def heartbeat_worker(self, worker_id: str, status: str, current_run_id: Optional[str] = None):
+    async def heartbeat_worker(
+        self, worker_id: str, status: str, current_run_id: Optional[str] = None
+    ):
         """Worker 状态更新"""
         async with self.session_factory() as session:
             async with session.begin():
@@ -45,16 +45,20 @@ class Storage:
                     .values(
                         last_heartbeat=datetime.now(timezone.utc),
                         status=status,
-                        current_run_id=current_run_id
+                        current_run_id=current_run_id,
                     )
                 )
 
-    async def get_active_workers(self, timeout_seconds: int = 60) -> List[WorkerHeartbeat]:
+    async def get_active_workers(
+        self, timeout_seconds: int = 60
+    ) -> List[WorkerHeartbeat]:
         """获取活跃的 Worker"""
         threshold = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
         async with self.session_factory() as session:
             result = await session.execute(
-                select(WorkerHeartbeat).where(WorkerHeartbeat.last_heartbeat > threshold)
+                select(WorkerHeartbeat).where(
+                    WorkerHeartbeat.last_heartbeat > threshold
+                )
             )
             return result.scalars().all()
 
@@ -64,7 +68,9 @@ class Storage:
         async with self.session_factory() as session:
             async with session.begin():
                 await session.execute(
-                    delete(WorkerHeartbeat).where(WorkerHeartbeat.last_heartbeat < threshold)
+                    delete(WorkerHeartbeat).where(
+                        WorkerHeartbeat.last_heartbeat < threshold
+                    )
                 )
 
     async def init_db(self):
@@ -76,7 +82,7 @@ class Storage:
         """初始化数据库表结构并开启 WAL 模式"""
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        
+
         # 显式开启 WAL (Write-Ahead Logging) 模式
         async with self.engine.connect() as conn:
             await conn.execute(text("PRAGMA journal_mode=WAL;"))
@@ -94,15 +100,17 @@ class Storage:
                 # 同时入队
                 queue_item = RunQueue(
                     run_id=run.run_id,
-                    priority=0, # v0.1 默认优先级
-                    enqueued_at=run.created_at
+                    priority=0,  # v0.1 默认优先级
+                    enqueued_at=run.created_at,
                 )
                 session.add(queue_item)
             # 提交后刷新 run 对象以返回 ID
             await session.refresh(run)
             return run
 
-    async def acquire_run_lease(self, worker_id: str, lease_seconds: int = 30) -> Optional[Run]:
+    async def acquire_run_lease(
+        self, worker_id: str, lease_seconds: int = 30
+    ) -> Optional[Run]:
         """
         Worker 核心逻辑：从队列中取出一个任务并锁定。
         包含并发控制逻辑。
@@ -111,14 +119,16 @@ class Storage:
         lease_expiry = now + timedelta(seconds=lease_seconds)
 
         async with self.session_factory() as session:
-            async with session.begin(): # 开启事务
+            async with session.begin():  # 开启事务
                 # 1. 获取队首任务 (LIMIT 1)
                 # 使用 with_for_update 虽在 SQLite 不完全生效，但语义上是个好习惯
                 result = await session.execute(
-                    select(RunQueue).order_by(RunQueue.priority.desc(), RunQueue.enqueued_at.asc()).limit(1)
+                    select(RunQueue)
+                    .order_by(RunQueue.priority.desc(), RunQueue.enqueued_at.asc())
+                    .limit(1)
                 )
                 queue_item = result.scalar_one_or_none()
-                
+
                 if not queue_item:
                     return None
 
@@ -128,7 +138,7 @@ class Storage:
                     # 数据不一致：队列里有但 Runs 表没了，清理掉
                     await session.delete(queue_item)
                     return None
-                
+
                 task_record = await session.get(Task, run_record.task_id)
                 if not task_record:
                     # 任务定义都没了，把 Run 标记为 FAILED
@@ -138,7 +148,7 @@ class Storage:
                     return None
 
                 # 2.1 检查全局并发 (TODO: 从 Config 传入，暂时略过)
-                
+
                 # 2.2 检查每任务并发
                 if task_record.concurrency_limit is not None:
                     # 统计当前正在运行且 Lease 有效的该类任务数量
@@ -146,10 +156,10 @@ class Storage:
                         select(func.count(Run.run_id)).where(
                             Run.task_id == task_record.task_id,
                             Run.status == RunStatus.RUNNING,
-                            Run.lease_expires_at > now
+                            Run.lease_expires_at > now,
                         )
                     )
-                    
+
                     if running_count >= task_record.concurrency_limit:
                         # 超过并发限制，跳过本次循环（或者让 Worker 等待）
                         # 这里我们选择什么都不做，返回 None，Worker 会稍后重试
@@ -164,16 +174,18 @@ class Storage:
                 run_record.started_at = now
                 run_record.lease_owner = worker_id
                 run_record.lease_expires_at = lease_expiry
-                
+
                 session.add(run_record)
-                
+
                 return run_record
 
-    async def extend_lease(self, run_id: str, worker_id: str, lease_seconds: int = 30) -> bool:
+    async def extend_lease(
+        self, run_id: str, worker_id: str, lease_seconds: int = 30
+    ) -> bool:
         """Worker 心跳：续租"""
         now = datetime.now(timezone.utc)
         new_expiry = now + timedelta(seconds=lease_seconds)
-        
+
         async with self.session_factory() as session:
             async with session.begin():
                 result = await session.execute(
@@ -181,7 +193,7 @@ class Storage:
                     .where(
                         Run.run_id == run_id,
                         Run.lease_owner == worker_id,
-                        Run.status == RunStatus.RUNNING
+                        Run.status == RunStatus.RUNNING,
                     )
                     .values(lease_expires_at=new_expiry)
                 )
@@ -192,9 +204,7 @@ class Storage:
         async with self.session_factory() as session:
             async with session.begin():
                 await session.execute(
-                    update(Run)
-                    .where(Run.run_id == run_id)
-                    .values(worker_pid=pid)
+                    update(Run).where(Run.run_id == run_id).values(worker_pid=pid)
                 )
 
     async def check_run_cancel_status(self, run_id: str) -> bool:
@@ -204,7 +214,13 @@ class Storage:
             run = await session.get(Run, run_id)
             return run.cancel_requested_at is not None if run else False
 
-    async def update_run_status(self, run_id: str, status: RunStatus, exit_code: Optional[int] = None, error: Optional[str] = None):
+    async def update_run_status(
+        self,
+        run_id: str,
+        status: RunStatus,
+        exit_code: Optional[int] = None,
+        error: Optional[str] = None,
+    ):
         """Worker 结束任务"""
         now = datetime.now(timezone.utc)
         async with self.session_factory() as session:
@@ -212,19 +228,21 @@ class Storage:
                 values = {
                     "status": status,
                     "finished_at": now,
-                    "lease_expires_at": None  # 清除租约
+                    "lease_expires_at": None,  # 清除租约
                 }
                 if exit_code is not None:
                     values["exit_code"] = exit_code
                 if error is not None:
                     values["error"] = error
-                
+
                 await session.execute(
                     update(Run).where(Run.run_id == run_id).values(**values)
                 )
 
+
 # 简单的单例模式占位，实际使用时应该由依赖注入管理
 _storage_instance: Optional[Storage] = None
+
 
 def get_storage() -> Storage:
     global _storage_instance

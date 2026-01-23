@@ -3,9 +3,11 @@ from pydantic import BaseModel, Field
 from taskhub_api.registry import TaskSpec
 from typing import List
 
+
 class SignalType(Enum):
     online = 1
     offline = 2
+
 
 class DemoParams(BaseModel):
     signals: List[int]
@@ -24,6 +26,7 @@ def build_command(params: DemoParams) -> List[str]:
 """
     return ["python3", "-c", script]
 
+
 task = TaskSpec(
     task_id="comm_backtest",
     name="商品期货回测",
@@ -31,5 +34,5 @@ task = TaskSpec(
     params_model=DemoParams,
     build_command=build_command,
     version="1.0.0",
-    concurrency_limit=2
+    concurrency_limit=2,
 )

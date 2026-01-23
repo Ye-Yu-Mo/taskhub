@@ -2,9 +2,11 @@ from pydantic import BaseModel, Field
 from taskhub_api.registry import TaskSpec
 from typing import List
 
+
 class DemoParams(BaseModel):
     count: int = Field(default=5, description="循环次数")
     message: str = Field(default="Hello", description="要打印的消息")
+
 
 def build_command(params: DemoParams) -> List[str]:
     # 将 Pydantic 对象转为 dict 后传给子进程
@@ -53,6 +55,7 @@ print("产物生成完毕")
 """
     return ["python3", "-c", script]
 
+
 task = TaskSpec(
     task_id="demo_v2",
     name="演示任务 V2",
@@ -60,5 +63,5 @@ task = TaskSpec(
     params_model=DemoParams,
     build_command=build_command,
     version="1.0.0",
-    concurrency_limit=2
+    concurrency_limit=2,
 )

@@ -5,29 +5,34 @@ import os
 import random
 import math
 
+
 def main():
     parser = argparse.ArgumentParser(description="Showcase Task Implementation")
     parser.add_argument("--title", type=str, default="My Analysis")
     parser.add_argument("--data-points", type=int, default=100)
     parser.add_argument("--noise-level", type=float, default=0.5)
     # 对于 boolean，使用 store_true/false 或者 type=lambda x: x.lower() == 'true'
-    parser.add_argument("--include-charts", type=str, default="True") 
+    parser.add_argument("--include-charts", type=str, default="True")
     parser.add_argument("--theme", type=str, default="light")
     parser.add_argument("--tags", type=str, default="")
-    
+
     args = parser.parse_args()
-    
+
     include_charts = args.include_charts.lower() == "true"
-    
+
     print(f"开始生成全能演示报告: {args.title}")
-    print(f"参数: points={args.data_points}, noise={args.noise_level}, theme={args.theme}")
+    print(
+        f"参数: points={args.data_points}, noise={args.noise_level}, theme={args.theme}"
+    )
 
     # 1. 模拟处理进度
     total_steps = 5
     for i in range(1, total_steps + 1):
         time.sleep(0.5)
         pct = int(i / total_steps * 100)
-        print(f"TASKHUB_EVENT {json.dumps({'type': 'progress', 'data': {'pct': pct, 'msg': f'Step {i}/{total_steps}'} })}")
+        print(
+            f"TASKHUB_EVENT {json.dumps({'type': 'progress', 'data': {'pct': pct, 'msg': f'Step {i}/{total_steps}'} })}"
+        )
 
     # 2. 准备目录
     # 注意：Worker 会设置 CWD 为 data/runs/r-xxx/，所以这里直接写相对路径即可
@@ -59,12 +64,12 @@ def main():
             x = (i / args.data_points) * width
             y = height - (val / max_val * height * 0.8) - (height * 0.1)
             points_str += f"{x},{y} "
-        
-        svg_content = f'''<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" style="background: #f8f9fa; border: 1px solid #ddd;">
+
+        svg_content = f"""<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" style="background: #f8f9fa; border: 1px solid #ddd;">
           <path d="M0 {height} L0 0 L{width} 0 L{width} {height} Z" fill="none" />
           <polyline points="{points_str}" fill="none" stroke="#2563eb" stroke-width="2" />
           <text x="20" y="30" font-family="sans-serif" font-size="20" fill="#333">{args.title} - Trend</text>
-        </svg>'''
+        </svg>"""
         with open(svg_path, "w") as f:
             f.write(svg_content)
 
@@ -74,7 +79,7 @@ def main():
     text_color = "#f3f4f6" if args.theme == "dark" else "#111827"
 
     # 这里的 f-string 是正常的 Python 代码，不需要双写花括号（除非是 CSS）
-    html_content = f'''<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html>
 <head>
 <style>
@@ -115,7 +120,7 @@ def main():
     </ul>
   </div>
 </body>
-</html>'''
+</html>"""
 
     with open(html_path, "w") as f:
         f.write(html_content)
@@ -125,26 +130,47 @@ def main():
         "run_id": os.environ.get("TASKHUB_RUN_ID", "unknown"),
         "items": [
             {
-                "artifact_id": "rep_html", "kind": "report", "title": "完整分析报告",
-                "file_id": "f_rep_html", "path": html_path, "mime": "text/html", "size_bytes": len(html_content)
+                "artifact_id": "rep_html",
+                "kind": "report",
+                "title": "完整分析报告",
+                "file_id": "f_rep_html",
+                "path": html_path,
+                "mime": "text/html",
+                "size_bytes": len(html_content),
             },
             {
-                "artifact_id": "dat_csv", "kind": "data", "title": "原始数据",
-                "file_id": "f_dat_csv", "path": csv_path, "mime": "text/csv", "size_bytes": len(str(data))
-            }
-        ]
+                "artifact_id": "dat_csv",
+                "kind": "data",
+                "title": "原始数据",
+                "file_id": "f_dat_csv",
+                "path": csv_path,
+                "mime": "text/csv",
+                "size_bytes": len(str(data)),
+            },
+        ],
     }
 
     if include_charts:
-        artifacts["items"].insert(1, {
-            "artifact_id": "cht_svg", "kind": "image", "title": "趋势图表",
-            "file_id": "f_cht_svg", "path": svg_path, "mime": "image/svg+xml", "size_bytes": len(svg_content)
-        })
+        artifacts["items"].insert(
+            1,
+            {
+                "artifact_id": "cht_svg",
+                "kind": "image",
+                "title": "趋势图表",
+                "file_id": "f_cht_svg",
+                "path": svg_path,
+                "mime": "image/svg+xml",
+                "size_bytes": len(svg_content),
+            },
+        )
 
     with open("artifacts.json", "w") as f:
         json.dump(artifacts, f)
 
-    print(f"TASKHUB_EVENT {json.dumps({'type': 'log', 'data': {'msg': 'Report generated successfully'} })}")
+    print(
+        f"TASKHUB_EVENT {json.dumps({'type': 'log', 'data': {'msg': 'Report generated successfully'} })}"
+    )
+
 
 if __name__ == "__main__":
     main()

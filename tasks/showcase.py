@@ -9,9 +9,11 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = BASE_DIR / "tasks" / "scripts" / "showcase_impl.py"
 
+
 class ReportTheme(str, Enum):
     LIGHT = "light"
     DARK = "dark"
+
 
 class ShowcaseParams(BaseModel):
     title: str = Field(default="My Analysis", description="报告标题")
@@ -21,17 +23,25 @@ class ShowcaseParams(BaseModel):
     tags: List[str] = Field(default=["demo", "test"], description="标签 (逗号分隔)")
     theme: ReportTheme = Field(default=ReportTheme.LIGHT, description="报告主题")
 
+
 def build_command(params: ShowcaseParams) -> List[str]:
     return [
-        "python3", 
+        "python3",
         str(SCRIPT_PATH),
-        "--title", params.title,
-        "--data-points", str(params.data_points),
-        "--noise-level", str(params.noise_level),
-        "--include-charts", str(params.include_charts),
-        "--theme", params.theme.value,
-        "--tags", ",".join(params.tags)
+        "--title",
+        params.title,
+        "--data-points",
+        str(params.data_points),
+        "--noise-level",
+        str(params.noise_level),
+        "--include-charts",
+        str(params.include_charts),
+        "--theme",
+        params.theme.value,
+        "--tags",
+        ",".join(params.tags),
     ]
+
 
 task = TaskSpec(
     task_id="showcase_v1",
@@ -40,5 +50,5 @@ task = TaskSpec(
     params_model=ShowcaseParams,
     build_command=build_command,
     version="1.0.0",
-    tags=["demo", "visual"]
+    tags=["demo", "visual"],
 )
