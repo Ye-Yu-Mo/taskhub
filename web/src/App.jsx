@@ -936,6 +936,16 @@ const CronList = ({ navigate }) => {
     mutate();
   };
 
+  const handleTrigger = async (cronId) => {
+    try {
+      await axios.post(`/api/cron/${cronId}/trigger`);
+      alert('任务已触发，请在运行历史中查看。');
+      navigate('runs');
+    } catch (e) {
+      alert('触发失败: ' + (e.response?.data?.detail || e.message));
+    }
+  };
+
   if (error) return <div className="text-red-500">加载失败</div>;
   if (!crons || !tasks) return <div className="text-gray-500">加载中...</div>;
 
@@ -973,8 +983,11 @@ const CronList = ({ navigate }) => {
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
                   {job.next_run_at ? new Date(job.next_run_at).toLocaleString() : '-'}
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
-                  <button onClick={() => handleDelete(job.cron_id)} className="text-red-600 hover:text-red-900 text-xs">
+                <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium flex justify-end gap-2">
+                  <button onClick={() => handleTrigger(job.cron_id)} className="text-blue-600 hover:text-blue-900 text-xs flex items-center gap-1 border px-2 py-1 rounded hover:bg-blue-50">
+                    <Play size={12} /> 立即运行
+                  </button>
+                  <button onClick={() => handleDelete(job.cron_id)} className="text-red-600 hover:text-red-900 text-xs flex items-center gap-1 border px-2 py-1 rounded hover:bg-red-50">
                     删除
                   </button>
                 </td>

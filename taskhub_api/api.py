@@ -110,7 +110,11 @@ async def list_workers(storage: Storage = Depends(get_db_storage)):
             "pid": w.pid,
             "status": w.status,
             "run_id": w.current_run_id,
-            "last_heartbeat": w.last_heartbeat,
+            "last_heartbeat": (
+                w.last_heartbeat.replace(tzinfo=timezone.utc).isoformat()
+                if w.last_heartbeat.tzinfo is None
+                else w.last_heartbeat.isoformat()
+            ),
         }
         for w in workers
     ]
@@ -389,6 +393,39 @@ async def delete_cron_job(cron_id: str, storage: Storage = Depends(get_db_storag
     if not success:
         raise HTTPException(status_code=404, detail="Cron Job not found")
     return {"status": "ok"}
+
+
+@api_app.post("/api/cron/{cron_id}/trigger", response_model=RunRead)
+async def trigger_cron_job(
+    cron_id: str,
+    storage: Storage = Depends(get_db_storage),
+    registry: Registry = Depends(get_registry),
+):
+    """手动触发一次 Cron 任务"""
+    job = await storage.get_cron_job(cron_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Cron job not found")
+
+    # 复用 create_run 逻辑
+    task = await storage.get_task(job.task_id)
+    if not task:
+        raise HTTPException(status_code=400, detail="Task definition missing")
+
+    run_id = f"r-manual-{uuid.uuid4().hex[:8]}"
+    workdir = f"data/runs/{run_id}"
+
+    new_run = Run(
+        run_id=run_id,
+        task_id=job.task_id,
+        task_version=task.version,
+        schema_hash=task.schema_hash,
+        status=RunStatus.QUEUED,
+        params=job.params,
+        workdir=workdir,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    return await storage.create_run(new_run)
 
 
 # --- 静态文件托管 (SPA Support) ---
