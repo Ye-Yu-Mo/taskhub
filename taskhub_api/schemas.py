@@ -89,3 +89,31 @@ class ArtifactItem(BaseModel):
 class ArtifactsRead(BaseModel):
     run_id: str
     items: List[ArtifactItem]
+
+
+class CronJobBase(BaseModel):
+    task_id: str
+    name: str
+    cron_expression: str
+    params: Dict[str, Any] = {}
+    is_enabled: bool = True
+
+
+class CronJobCreate(CronJobBase):
+    pass
+
+
+class CronJobRead(CronJobBase):
+    cron_id: str
+    last_run_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+    created_at: datetime
+
+    @field_validator("created_at", "last_run_at", "next_run_at", mode="before")
+    def ensure_utc(cls, v):
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+    class Config:
+        from_attributes = True

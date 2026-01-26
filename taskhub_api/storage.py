@@ -5,7 +5,7 @@ from sqlalchemy import select, update, delete, func, text
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from .models import Base, Task, Run, RunQueue, RunStatus, WorkerHeartbeat
+from .models import Base, Task, Run, RunQueue, RunStatus, WorkerHeartbeat, CronJob
 
 # 默认数据库连接
 DB_URL = "sqlite+aiosqlite:///data/taskhub.db"
@@ -17,6 +17,69 @@ class Storage:
         self.engine = create_async_engine(db_url, echo=False)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
 
+    # --- Cron Jobs Methods ---
+
+    async def list_cron_jobs(self) -> List[CronJob]:
+        async with self.session_factory() as session:
+            result = await session.execute(select(CronJob))
+            return result.scalars().all()
+
+    async def get_cron_job(self, cron_id: str) -> Optional[CronJob]:
+        async with self.session_factory() as session:
+            return await session.get(CronJob, cron_id)
+
+    async def create_cron_job(self, job: CronJob) -> CronJob:
+        async with self.session_factory() as session:
+            async with session.begin():
+                session.add(job)
+            await session.refresh(job)
+            return job
+
+    async def update_cron_job(self, cron_id: str, updates: dict) -> Optional[CronJob]:
+        async with self.session_factory() as session:
+            async with session.begin():
+                stmt = (
+                    update(CronJob)
+                    .where(CronJob.cron_id == cron_id)
+                    .values(**updates)
+                    .returning(CronJob)
+                )
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+
+    async def delete_cron_job(self, cron_id: str) -> bool:
+        async with self.session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    delete(CronJob).where(CronJob.cron_id == cron_id)
+                )
+                return result.rowcount > 0
+
+    async def get_due_cron_jobs(self) -> List[CronJob]:
+        """获取所有到期的 Cron 任务"""
+        now = datetime.now(timezone.utc)
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(CronJob).where(
+                    CronJob.is_enabled == True, CronJob.next_run_at <= now
+                )
+            )
+            return result.scalars().all()
+
+    async def update_cron_job_next_run(
+        self, cron_id: str, last_run: datetime, next_run: datetime
+    ):
+        """更新 Cron 下次运行时间"""
+        async with self.session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(CronJob)
+                    .where(CronJob.cron_id == cron_id)
+                    .values(last_run_at=last_run, next_run_at=next_run)
+                )
+
+    # --- Existing Methods ---
+    
     async def register_worker(self, worker_id: str, hostname: str, pid: int):
         """Worker 启动注册"""
         async with self.session_factory() as session:

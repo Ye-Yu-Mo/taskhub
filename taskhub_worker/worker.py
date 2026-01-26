@@ -111,13 +111,20 @@ class Worker:
 
         # 记录 PID 以便 Reaper 清理（在 POSIX 下我们要的是进程组 ID）
         # asyncio 不直接提供 pgid，但我们可以通过 preexec_fn 开启 session
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=run_record.workdir,
-            preexec_fn=os.setsid,  # 核心：创建新进程组
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=run_record.workdir,
+                preexec_fn=os.setsid,  # 核心：创建新进程组
+            )
+        except Exception as e:
+            logger.error(f"启动进程失败: {e}")
+            await self.storage.update_run_status(
+                run_record.run_id, RunStatus.FAILED, error=f"Spawn failed: {e}"
+            )
+            return
 
         pgid = process.pid  # 在 setsid 后，pid 就是 pgid
 
@@ -145,6 +152,11 @@ class Worker:
 
         try:
             exit_code = await process.wait()
+            
+            # 关键修复：先等待日志流完全落盘，再更新数据库状态。
+            # 否则前端看到"Finished"状态停止轮询时，日志可能还没写完。
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            
             logger.info(f"任务 {run_record.run_id} 运行结束，退出码: {exit_code}")
 
             # 检查是否是因为取消而结束的
@@ -177,6 +189,7 @@ class Worker:
             )
         finally:
             heartbeat_task.cancel()
+            # 确保任务被 await，即使在异常路径下
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
     async def heartbeat_loop(self, run_id: str, pgid: int):

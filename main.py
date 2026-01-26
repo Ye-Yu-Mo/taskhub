@@ -14,7 +14,7 @@ app = typer.Typer(help="TaskHub: 一个可靠的单机任务运行平台。")
 @app.command()
 def api(
     host: str = "127.0.0.1",
-    port: int = 8000,
+    port: int = 8457,
     config: Path = typer.Option(Path("config.yaml"), help="配置文件路径"),
 ):
     """启动 TaskHub API 服务器。"""
@@ -70,6 +70,33 @@ def reaper(
         asyncio.run(run_reaper())
     except KeyboardInterrupt:
         typer.echo("\nReaper 已停止。")
+
+
+@app.command()
+def scheduler(
+    interval: int = typer.Option(10, help="检查间隔(秒)"),
+    config: Path = typer.Option(Path("config.yaml"), help="配置文件路径"),
+):
+    """启动定时任务调度器 (Scheduler)。"""
+    typer.echo(f"正在启动 Scheduler，检查间隔：{interval}s")
+
+    async def run_scheduler():
+        from taskhub_api.storage import Storage
+        from taskhub_worker.scheduler import Scheduler
+
+        storage = Storage(DB_URL)
+        await storage.init_db()
+
+        scheduler_instance = Scheduler(storage, check_interval=interval)
+        try:
+            await scheduler_instance.run()
+        except asyncio.CancelledError:
+            pass
+
+    try:
+        asyncio.run(run_scheduler())
+    except KeyboardInterrupt:
+        typer.echo("\nScheduler 已停止。")
 
 
 if __name__ == "__main__":

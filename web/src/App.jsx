@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import useSWR, { mutate } from 'swr';
 import axios from 'axios';
-import { 
-  Activity, 
-  Play, 
-  Clock, 
-  CheckCircle, 
-  XCircle, 
-  Terminal, 
-  Download, 
-  Layers, 
+import {
+  Activity,
+  Play,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Terminal,
+  Download,
+  Layers,
   RefreshCw,
   Cpu,
   Database,
@@ -19,8 +19,18 @@ import {
   FileText
 } from 'lucide-react';
 
+// --- API CONFIGURATION ---
+// Set base URL to /new_system to avoid conflicts with FuturesLiveStats API
+// axios.defaults.baseURL = '/new_system';
+
 // --- API UTILS ---
-const fetcher = url => axios.get(url).then(res => res.data);
+const fetcher = url => axios.get(url).then(res => {
+  if (typeof res.data === 'string' && res.data.includes('<!doctype html>')) {
+    console.error('API received HTML instead of JSON for:', url);
+    throw new Error('API Endpoint not found (HTML returned)');
+  }
+  return res.data;
+});
 
 // --- COMPONENTS ---
 
@@ -500,7 +510,7 @@ const Dashboard = ({ runs, tasks, navigate }) => {
   );
 };
 
-const TaskList = ({ tasks, onRunClick }) => {
+const TaskList = ({ tasks, onRunClick, onScheduleClick }) => {
   return (
     <div className="space-y-4">
       <SectionHeader title="任务列表 (Task Registry)" />
@@ -535,10 +545,16 @@ const TaskList = ({ tasks, onRunClick }) => {
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 font-mono">
                   {task.concurrency_limit || '∞'}
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
+                <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium flex justify-end gap-2">
+                  <button 
+                    onClick={() => onScheduleClick(task)}
+                    className="text-gray-600 hover:text-blue-600 hover:bg-blue-50 border px-3 py-1 rounded-md text-xs transition-colors flex items-center gap-1"
+                  >
+                    <Clock size={12} /> 定时
+                  </button>
                   <button 
                     onClick={() => onRunClick(task)}
-                    className="text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded-md text-xs transition-colors flex items-center ml-auto gap-1"
+                    className="text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded-md text-xs transition-colors flex items-center gap-1"
                   >
                     <Play size={12} /> 运行
                   </button>
@@ -910,17 +926,87 @@ const RunDetail = ({ runId, onNavigateBack, onNavigatePreview, onNavigateReport 
   );
 };
 
-const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
+const CronList = ({ navigate }) => {
+  const { data: crons, error, mutate } = useSWR('/api/cron', fetcher);
+  const { data: tasks } = useSWR('/api/tasks', fetcher);
+
+  const handleDelete = async (cronId) => {
+    if(!confirm('确定删除该定时任务吗？')) return;
+    await axios.delete(`/api/cron/${cronId}`);
+    mutate();
+  };
+
+  if (error) return <div className="text-red-500">加载失败</div>;
+  if (!crons || !tasks) return <div className="text-gray-500">加载中...</div>;
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader title="定时任务 (Cron Jobs)" />
+      <div className="bg-white border rounded shadow-sm overflow-hidden">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cron 表达式</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">任务</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">下次运行</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {crons.length === 0 ? (
+               <tr><td colSpan="5" className="px-4 py-8 text-center text-gray-400 text-sm">暂无定时任务</td></tr>
+            ) : crons.map(job => (
+              <tr key={job.cron_id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 whitespace-nowrap font-mono text-sm text-blue-600 font-bold">
+                  {job.cron_expression}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <div className="text-sm font-medium text-gray-900">{tasks.find(t => t.task_id === job.task_id)?.name || job.task_id}</div>
+                  <div className="text-xs text-gray-400">{job.cron_id}</div>
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                   <span className={`px-2 py-0.5 rounded text-xs font-bold ${job.is_enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'}`}>
+                     {job.is_enabled ? 'ACTIVE' : 'DISABLED'}
+                   </span>
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                  {job.next_run_at ? new Date(job.next_run_at).toLocaleString() : '-'}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
+                  <button onClick={() => handleDelete(job.cron_id)} className="text-red-600 hover:text-red-900 text-xs">
+                    删除
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const TaskModal = ({ task, isOpen, onClose, onSubmit, mode = 'run' }) => {
   if (!isOpen || !task) return null;
 
   const [formData, setFormData] = useState({});
+  const [cronExpression, setCronExpression] = useState('*/15 * * * *');
+  const [cronMode, setCronMode] = useState('simple'); // 'simple' | 'advanced'
+  
+  // Simple Mode State
+  const [simpleType, setSimpleType] = useState('interval'); // 'interval', 'daily', 'weekly'
+  const [intervalVal, setIntervalVal] = useState(15);
+  const [intervalUnit, setIntervalUnit] = useState('minute'); // 'minute', 'hour'
+  const [timeVal, setTimeVal] = useState('09:00');
+  const [weekDay, setWeekDay] = useState('1'); // 1=Mon
+
   const properties = task.params_schema?.properties || {};
 
   useEffect(() => {
     // Populate defaults
     const defaults = {};
     Object.entries(properties).forEach(([key, conf]) => {
-        // Pydantic v2 schema uses 'default' key
         if (conf.default !== undefined) {
              defaults[key] = conf.default;
         } else if (conf.type === 'boolean') {
@@ -932,23 +1018,52 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
     setFormData(defaults);
   }, [task]);
 
+  // Cron Generator Logic
+  useEffect(() => {
+    if (mode !== 'cron' || cronMode !== 'simple') return;
+
+    let expr = '';
+    const timeParts = (timeVal || '00:00').split(':');
+    const hh = parseInt(timeParts[0], 10) || 0;
+    const mm = parseInt(timeParts[1], 10) || 0;
+    
+    switch (simpleType) {
+      case 'interval':
+        if (intervalUnit === 'minute') {
+           expr = `*/${intervalVal} * * * *`;
+        } else {
+           expr = `0 */${intervalVal} * * *`;
+        }
+        break;
+      case 'daily':
+        expr = `${mm} ${hh} * * *`;
+        break;
+      case 'weekly':
+        expr = `${mm} ${hh} * * ${weekDay}`;
+        break;
+    }
+    setCronExpression(expr);
+  }, [simpleType, intervalVal, intervalUnit, timeVal, weekDay, cronMode, mode]);
+
   const handleChange = (key, val, type) => {
     let finalVal = val;
     if (type === 'integer' || type === 'number') {
         finalVal = val === '' ? 0 : Number(val);
     } else if (type === 'boolean') {
-        finalVal = val; // val is checked boolean
+        finalVal = val;
     } else if (type === 'array') {
-        // Simple comma separated
-        finalVal = val.split(',').map(s => s.trim()).filter(s => s);
+        if (Array.isArray(val)) {
+            finalVal = val;
+        } else {
+            finalVal = val.split(',').map(s => s.trim()).filter(s => s);
+        }
     }
     setFormData(prev => ({ ...prev, [key]: finalVal }));
   };
 
   const renderInput = (key, config) => {
-    // Enum (Select)
+    // ... (Same input render logic)
     if (config.enum || (config.allOf && config.allOf[0]?.enum)) { 
-      // Handle Pydantic enum schema variations if necessary, usually config.enum is present
       const options = config.enum || config.allOf[0].enum;
       return (
         <select 
@@ -960,8 +1075,6 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
         </select>
       );
     }
-
-    // Boolean (Checkbox)
     if (config.type === 'boolean') {
         return (
             <div className="flex items-center h-9">
@@ -975,8 +1088,6 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
             </div>
         );
     }
-
-    // Number / Integer
     if (config.type === 'integer' || config.type === 'number') {
         return (
             <input 
@@ -988,22 +1099,35 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
             />
         );
     }
-
-    // Array (Comma separated text)
     if (config.type === 'array') {
-        const displayVal = Array.isArray(formData[key]) ? formData[key].join(', ') : '';
+        const values = Array.isArray(formData[key]) ? formData[key] : [];
+        const handleKeyDown = (e) => {
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                const val = e.target.value.trim();
+                if (val && !values.includes(val)) handleChange(key, [...values, val], 'array');
+                e.target.value = '';
+            } else if (e.key === 'Backspace' && !e.target.value && values.length > 0) {
+                handleChange(key, values.slice(0, -1), 'array');
+            }
+        };
+        const removeTag = (idx) => handleChange(key, values.filter((_, i) => i !== idx), 'array');
         return (
-            <input 
-              type="text"
-              placeholder="value1, value2, ..."
-              className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono"
-              value={displayVal}
-              onChange={(e) => handleChange(key, e.target.value, 'array')}
-            />
+            <div className="w-full border rounded px-2 py-1.5 text-sm focus-within:ring-2 focus-within:ring-blue-500 bg-white min-h-[38px] flex flex-wrap gap-2">
+                {values.map((v, i) => (
+                    <span key={i} className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full text-xs flex items-center gap-1">
+                        {v} <button onClick={() => removeTag(i)} className="hover:text-blue-900 font-bold">×</button>
+                    </span>
+                ))}
+                <input type="text" className="flex-1 outline-none min-w-[60px] bg-transparent" placeholder={values.length===0?"输入后回车...":""} onKeyDown={handleKeyDown} 
+                  onBlur={(e) => {
+                     const val = e.target.value.trim();
+                     if (val && !values.includes(val)) { handleChange(key, [...values, val], 'array'); e.target.value = ''; }
+                  }}
+                />
+            </div>
         );
     }
-
-    // String (Default)
     return (
         <input 
           type="text"
@@ -1019,13 +1143,88 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
       <div className="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
         <div className="px-6 py-4 border-b flex justify-between items-center bg-gray-50 flex-none">
           <div>
-            <h3 className="text-lg font-bold text-gray-900">运行: {task.name}</h3>
+            <h3 className="text-lg font-bold text-gray-900">{mode === 'cron' ? '新建计划任务' : '运行任务'}: {task.name}</h3>
             <p className="text-xs text-gray-500 font-mono">{task.task_id}</p>
           </div>
           <button onClick={onClose}><XCircle className="text-gray-400 hover:text-gray-600" /></button>
         </div>
         
         <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {mode === 'cron' && (
+             <div className="bg-blue-50 p-4 rounded border border-blue-100 mb-4">
+               <div className="flex gap-4 mb-3 border-b border-blue-200 pb-2">
+                  <button onClick={() => setCronMode('simple')} className={`text-sm font-bold ${cronMode==='simple' ? 'text-blue-800' : 'text-blue-400 hover:text-blue-600'}`}>简易模式</button>
+                  <button onClick={() => setCronMode('advanced')} className={`text-sm font-bold ${cronMode==='advanced' ? 'text-blue-800' : 'text-blue-400 hover:text-blue-600'}`}>高级模式 (Cron)</button>
+               </div>
+
+               {cronMode === 'simple' ? (
+                 <div className="space-y-3">
+                    <div className="flex gap-2">
+                       {['interval', 'daily', 'weekly'].map(t => (
+                          <button 
+                            key={t}
+                            onClick={() => setSimpleType(t)}
+                            className={`flex-1 py-1 text-xs rounded border ${simpleType === t ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-200'}`}
+                          >
+                            {{'interval': '间隔循环', 'daily': '每天', 'weekly': '每周'}[t]}
+                          </button>
+                       ))}
+                    </div>
+                    
+                    {simpleType === 'interval' && (
+                       <div className="flex items-center gap-2">
+                          <span className="text-sm text-blue-900">每隔</span>
+                          <input type="number" min="1" value={intervalVal} onChange={e => setIntervalVal(e.target.value)} className="w-16 border rounded px-2 py-1 text-sm text-center" />
+                          <select value={intervalUnit} onChange={e => setIntervalUnit(e.target.value)} className="border rounded px-2 py-1 text-sm bg-white">
+                             <option value="minute">分钟</option>
+                             <option value="hour">小时</option>
+                          </select>
+                          <span className="text-sm text-blue-900">执行一次</span>
+                       </div>
+                    )}
+                    
+                    {(simpleType === 'daily' || simpleType === 'weekly') && (
+                        <div className="flex items-center gap-2">
+                           <span className="text-sm text-blue-900">时间:</span>
+                           <input type="time" value={timeVal} onChange={e => setTimeVal(e.target.value)} className="border rounded px-2 py-1 text-sm bg-white" />
+                        </div>
+                    )}
+
+                    {simpleType === 'weekly' && (
+                        <div className="flex items-center gap-2">
+                           <span className="text-sm text-blue-900">星期:</span>
+                           <select value={weekDay} onChange={e => setWeekDay(e.target.value)} className="border rounded px-2 py-1 text-sm bg-white">
+                              <option value="1">周一</option>
+                              <option value="2">周二</option>
+                              <option value="3">周三</option>
+                              <option value="4">周四</option>
+                              <option value="5">周五</option>
+                              <option value="6">周六</option>
+                              <option value="0">周日</option>
+                           </select>
+                        </div>
+                    )}
+
+                    <div className="text-xs text-blue-600 font-mono mt-2 pt-2 border-t border-blue-200">
+                       预览: {cronExpression}
+                    </div>
+                 </div>
+               ) : (
+                 <div>
+                   <label className="block text-sm font-bold text-blue-800 mb-1">Cron 表达式</label>
+                   <input 
+                     type="text" 
+                     value={cronExpression}
+                     onChange={e => setCronExpression(e.target.value)}
+                     className="w-full border rounded px-3 py-2 font-mono text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                     placeholder="* * * * *"
+                   />
+                   <p className="text-xs text-blue-600 mt-1">格式: 分 时 日 月 周 (例如: */5 * * * *)</p>
+                 </div>
+               )}
+             </div>
+          )}
+
           {Object.entries(properties).map(([key, config]) => (
             <div key={key}>
               <div className="flex justify-between mb-1">
@@ -1037,26 +1236,18 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
                   </span>
               </div>
               {config.description && <p className="text-xs text-gray-500 mb-2">{config.description}</p>}
-              
               {renderInput(key, config)}
             </div>
           ))}
-          
-          <div className="mt-4 pt-4 border-t">
-            <label className="block text-xs font-bold text-gray-500 uppercase mb-2">JSON 预览</label>
-            <div className="bg-gray-800 text-green-400 p-3 rounded text-xs font-mono overflow-x-auto">
-              {JSON.stringify(formData, null, 2)}
-            </div>
-          </div>
         </div>
 
         <div className="bg-gray-50 px-6 py-4 flex justify-end gap-3 border-t flex-none">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">取消</button>
           <button 
-            onClick={() => onSubmit(task.task_id, formData)}
+            onClick={() => onSubmit(task.task_id, formData, cronExpression)}
             className="px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 shadow-sm"
           >
-            确认运行
+            {mode === 'cron' ? '创建计划' : '确认运行'}
           </button>
         </div>
       </div>
@@ -1067,15 +1258,17 @@ const RunModal = ({ task, isOpen, onClose, onSubmit }) => {
 // 3. Main App Layout & Logic
 
 export default function App() {
-  const [route, setRoute] = useState('dashboard'); // dashboard, tasks, runs, run_detail
+  const [route, setRoute] = useState('dashboard'); // dashboard, tasks, runs, run_detail, cron
   const [routeParams, setRouteParams] = useState({});
   
   // Data Fetching
   const { data: tasks, error: tasksError } = useSWR('/api/tasks', fetcher);
   const { data: runs, error: runsError, mutate: mutateRuns } = useSWR('/api/runs', fetcher, { refreshInterval: 5000 });
+  const { mutate: mutateCrons } = useSWR('/api/cron', fetcher);
   
   // Modal State
   const [isRunModalOpen, setIsRunModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState('run'); // 'run' | 'cron'
   const [selectedTask, setSelectedTask] = useState(null);
 
   // --- NAVIGATION HELPERS ---
@@ -1087,18 +1280,38 @@ export default function App() {
   // --- ACTIONS ---
   const handleOpenRunModal = (task) => {
     setSelectedTask(task);
+    setModalMode('run');
     setIsRunModalOpen(true);
   };
 
-  const handleSubmitRun = async (taskId, params) => {
+  const handleOpenCronModal = (task) => {
+    setSelectedTask(task);
+    setModalMode('cron');
+    setIsRunModalOpen(true);
+  };
+
+  const handleModalSubmit = async (taskId, params, cronExpression) => {
     try {
-      const res = await axios.post(`/api/tasks/${taskId}/runs`, { params });
-      mutateRuns(); // refresh list
-      setIsRunModalOpen(false);
-      navigate('run_detail', { id: res.data.run_id });
+      if (modalMode === 'run') {
+        const res = await axios.post(`/api/tasks/${taskId}/runs`, { params });
+        mutateRuns(); // refresh list
+        setIsRunModalOpen(false);
+        navigate('run_detail', { id: res.data.run_id });
+      } else {
+        // Create Cron
+        await axios.post('/api/cron', {
+          task_id: taskId,
+          cron_expression: cronExpression,
+          params: params,
+          name: `Cron: ${selectedTask.name}`
+        });
+        mutateCrons();
+        setIsRunModalOpen(false);
+        navigate('cron');
+      }
     } catch (e) {
       console.error(e);
-      alert("启动失败: " + e.message);
+      alert((modalMode === 'run' ? "启动失败: " : "创建失败: ") + (e.response?.data?.detail || e.message));
     }
   };
 
@@ -1111,7 +1324,9 @@ export default function App() {
       case 'dashboard':
         return <Dashboard runs={runs} tasks={tasks} navigate={navigate} />;
       case 'tasks':
-        return <TaskList tasks={tasks} onRunClick={handleOpenRunModal} />;
+        return <TaskList tasks={tasks} onRunClick={handleOpenRunModal} onScheduleClick={handleOpenCronModal} />;
+      case 'cron':
+        return <CronList navigate={navigate} />;
       case 'runs':
         return <RunList tasks={tasks} navigate={navigate} />;
       case 'workers':
@@ -1161,6 +1376,12 @@ export default function App() {
             <List size={18} className="mr-3" /> 任务列表 (Tasks)
           </button>
           <button 
+             onClick={() => navigate('cron')}
+             className={`flex items-center w-full px-3 py-2 rounded-md transition-colors ${route === 'cron' ? 'bg-gray-800 text-white' : 'hover:bg-gray-800 hover:text-white'}`}
+          >
+            <Clock size={18} className="mr-3" /> 定时任务 (Cron)
+          </button>
+          <button 
              onClick={() => navigate('runs')}
              className={`flex items-center w-full px-3 py-2 rounded-md transition-colors ${['runs', 'run_detail'].includes(route) ? 'bg-gray-800 text-white' : 'hover:bg-gray-800 hover:text-white'}`}
           >
@@ -1191,11 +1412,12 @@ export default function App() {
       </main>
 
       {/* Modals */}
-      <RunModal 
+      <TaskModal 
         task={selectedTask} 
         isOpen={isRunModalOpen} 
         onClose={() => setIsRunModalOpen(false)}
-        onSubmit={handleSubmitRun}
+        onSubmit={handleModalSubmit}
+        mode={modalMode}
       />
     </div>
   );

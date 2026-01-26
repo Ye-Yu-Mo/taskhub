@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
-from .models import Run, RunStatus, Task
+from .models import Run, RunStatus, Task, CronJob
 from .schemas import (
     TaskRead,
     RunCreate,
@@ -17,9 +17,12 @@ from .schemas import (
     EventRead,
     ArtifactsRead,
     ArtifactItem,
+    CronJobCreate,
+    CronJobRead,
 )
 from .storage import Storage, _storage_instance, DB_URL
 from .registry import Registry, get_schema_hash
+from croniter import croniter
 
 _registry_instance: Optional[Registry] = None
 
@@ -328,6 +331,64 @@ async def download_file(
         media_type=media_type,
         content_disposition_type=disposition,
     )
+
+
+# --- Cron Jobs API ---
+
+
+@api_app.get("/api/cron", response_model=List[CronJobRead])
+async def list_cron_jobs(storage: Storage = Depends(get_db_storage)):
+    """获取所有定时任务"""
+    return await storage.list_cron_jobs()
+
+
+@api_app.post("/api/cron", response_model=CronJobRead)
+async def create_cron_job(
+    req: CronJobCreate,
+    storage: Storage = Depends(get_db_storage),
+    registry: Registry = Depends(get_registry),
+):
+    """创建定时任务"""
+    # 1. 校验 Task 存在
+    task = await storage.get_task(req.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    # 2. 校验 Params
+    task_spec = registry.get_task(req.task_id)
+    if task_spec:
+        try:
+            task_spec.params_model(**req.params)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"参数校验失败: {e}")
+
+    # 3. 校验 Cron 表达式
+    if not croniter.is_valid(req.cron_expression):
+        raise HTTPException(status_code=422, detail="无效的 Cron 表达式")
+
+    # 4. 计算首次运行时间
+    now = datetime.now(timezone.utc)
+    next_run = croniter(req.cron_expression, now).get_next(datetime)
+
+    job = CronJob(
+        cron_id=f"cron-{uuid.uuid4().hex[:8]}",
+        task_id=req.task_id,
+        name=req.name,
+        cron_expression=req.cron_expression,
+        params=req.params,
+        is_enabled=req.is_enabled,
+        next_run_at=next_run,
+    )
+
+    return await storage.create_cron_job(job)
+
+
+@api_app.delete("/api/cron/{cron_id}")
+async def delete_cron_job(cron_id: str, storage: Storage = Depends(get_db_storage)):
+    success = await storage.delete_cron_job(cron_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Cron Job not found")
+    return {"status": "ok"}
 
 
 # --- 静态文件托管 (SPA Support) ---

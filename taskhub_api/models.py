@@ -124,3 +124,24 @@ class WorkerHeartbeat(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class CronJob(Base):
+    """定时任务配置"""
+
+    __tablename__ = "cron_jobs"
+
+    cron_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(200))
+    cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
+    params: Mapped[Dict[str, Any]] = mapped_column(JSON, default={})
+
+    is_enabled: Mapped[bool] = mapped_column(default=True)
+
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(timezone.utc)
+    )
