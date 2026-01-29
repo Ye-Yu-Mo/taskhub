@@ -176,71 +176,74 @@ class Storage:
     ) -> Optional[Run]:
         """
         Worker 核心逻辑：从队列中取出一个任务并锁定。
-        包含并发控制逻辑。
+        解决 Head-of-Line Blocking：如果队首任务达到并发限制，尝试队列中后面的任务。
         """
         now = datetime.now(timezone.utc)
         lease_expiry = now + timedelta(seconds=lease_seconds)
 
         async with self.session_factory() as session:
             async with session.begin():  # 开启事务
-                # 1. 获取队首任务 (LIMIT 1)
-                # 使用 with_for_update 虽在 SQLite 不完全生效，但语义上是个好习惯
+                # 1. 获取候选任务 (尝试前 10 个，避免队首阻塞)
                 result = await session.execute(
                     select(RunQueue)
                     .order_by(RunQueue.priority.desc(), RunQueue.enqueued_at.asc())
-                    .limit(1)
+                    .limit(10)
                 )
-                queue_item = result.scalar_one_or_none()
+                candidates = result.scalars().all()
 
-                if not queue_item:
+                if not candidates:
                     return None
 
-                # 2. 检查该任务的并发限制
-                run_record = await session.get(Run, queue_item.run_id)
-                if not run_record:
-                    # 数据不一致：队列里有但 Runs 表没了，清理掉
-                    await session.delete(queue_item)
-                    return None
+                for queue_item in candidates:
+                    # 2. 检查该任务的并发限制
+                    run_record = await session.get(Run, queue_item.run_id)
+                    if not run_record:
+                        await session.delete(queue_item)
+                        continue
 
-                task_record = await session.get(Task, run_record.task_id)
-                if not task_record:
-                    # 任务定义都没了，把 Run 标记为 FAILED
-                    run_record.status = RunStatus.FAILED
-                    run_record.error = "Task definition not found"
-                    await session.delete(queue_item)
-                    return None
+                    task_record = await session.get(Task, run_record.task_id)
+                    if not task_record:
+                        run_record.status = RunStatus.FAILED
+                        run_record.error = "Task definition not found"
+                        await session.delete(queue_item)
+                        continue
 
-                # 2.1 检查全局并发 (TODO: 从 Config 传入，暂时略过)
-
-                # 2.2 检查每任务并发
-                if task_record.concurrency_limit is not None:
-                    # 统计当前正在运行且 Lease 有效的该类任务数量
-                    running_count = await session.scalar(
-                        select(func.count(Run.run_id)).where(
-                            Run.task_id == task_record.task_id,
-                            Run.status == RunStatus.RUNNING,
-                            Run.lease_expires_at > now,
+                    # 2.2 检查每任务并发
+                    if task_record.concurrency_limit is not None:
+                        running_count = await session.scalar(
+                            select(func.count(Run.run_id)).where(
+                                Run.task_id == task_record.task_id,
+                                Run.status == RunStatus.RUNNING,
+                                Run.lease_expires_at > now,
+                            )
                         )
+
+                        if running_count >= task_record.concurrency_limit:
+                            # 超过并发限制，尝试队列中的下一个候选者
+                            continue
+
+                    # 3. 抢锁成功：从队列删除
+                    # 关键修复：显式执行 delete 并检查 rowcount，防止并发抢占
+                    del_result = await session.execute(
+                        delete(RunQueue).where(RunQueue.run_id == run_record.run_id)
                     )
+                    
+                    if del_result.rowcount == 0:
+                        # 手慢了，被别人抢了，尝试下一个
+                        continue
 
-                    if running_count >= task_record.concurrency_limit:
-                        # 超过并发限制，跳过本次循环（或者让 Worker 等待）
-                        # 这里我们选择什么都不做，返回 None，Worker 会稍后重试
-                        # 优化：可以把这个任务放到队尾？暂时不用，太复杂。
-                        return None
+                    # 4. 更新 Run 状态
+                    run_record.status = RunStatus.RUNNING
+                    run_record.started_at = now
+                    run_record.lease_owner = worker_id
+                    run_record.lease_expires_at = lease_expiry
 
-                # 3. 抢锁成功：从队列删除
-                await session.delete(queue_item)
+                    session.add(run_record)
+                    return run_record
 
-                # 4. 更新 Run 状态
-                run_record.status = RunStatus.RUNNING
-                run_record.started_at = now
-                run_record.lease_owner = worker_id
-                run_record.lease_expires_at = lease_expiry
+                return None
 
-                session.add(run_record)
-
-                return run_record
+    
 
     async def extend_lease(
         self, run_id: str, worker_id: str, lease_seconds: int = 30
